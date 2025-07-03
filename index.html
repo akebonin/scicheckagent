@@ -268,7 +268,7 @@
             <button type="submit" class="btn btn-success btn-lg">Download All Reports (PDF)</button>
         </form>
     </div>
-    
+
     <footer class="text-center text-muted footer">
       Built by Alis Grave Nil
     </footer>
@@ -304,7 +304,7 @@ document.addEventListener('DOMContentLoaded', () => {
         textInput.value = '';
         urlInput.value = '';
     });
-    
+
     // Fetch article from URL
     fetchArticleBtn.addEventListener('click', async () => {
         const url = urlInput.value.trim();
@@ -340,7 +340,7 @@ document.addEventListener('DOMContentLoaded', () => {
             alert('Article text is empty. Please paste content or fetch from a URL.');
             return;
         }
-        
+
         toggleLoading(runAnalysisBtn, true, "Analyzing...");
         resultsContainer.innerHTML = ''; // Clear previous results
         pdfDownloadSection.classList.add('d-none');
@@ -360,7 +360,7 @@ document.addEventListener('DOMContentLoaded', () => {
                  const errorMessage = data.error || `Failed to analyze text: ${response.status}`;
                  throw new Error(errorMessage);
             }
-            
+
             if (data.claims.length === 0) {
                 resultsContainer.innerHTML = '<div class="alert alert-info mt-4">No explicit claims found in the provided text.</div>';
                 return;
@@ -404,7 +404,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
     });
-    
+
     // --- UI/DISPLAY FUNCTIONS ---
 
     function toggleLoading(button, isLoading, loadingText = '') {
@@ -431,7 +431,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="claim-card" id="${claimId}">
                     <h5>Claim ${index + 1}</h5>
                     <p class="claim-text mb-3">${escapeHTML(claimText)}</p>
-                    
+
                     <strong>Model Verdict:</strong>
                     <div id="model-verdict-${claimId}" class="verdict-box model-verdict-box mb-3" style="min-height: 50px;">
                         <span class="text-muted">Click "Get Model Details" to load.</span>
@@ -484,11 +484,11 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || `Failed to get claim details: ${response.status}`);
-            
+
             // Process model verdict to make links clickable and apply bolding
             const formattedVerdict = formatTextWithMarkdownAndLinks(data.model_verdict);
             verdictContainer.innerHTML = formattedVerdict;
-            
+
             questionsList.innerHTML = ''; // Clear placeholder
 
             if (data.questions && data.questions.length > 0) {
@@ -497,9 +497,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     listItem.className = 'list-group-item'; // Removed d-flex for vertical stacking
                     listItem.innerHTML = `
                         <span class="d-block mb-2"><b>Q${q_idx + 1}:</b> ${escapeHTML(q)}</span>
-                        <button class="btn btn-primary btn-sm generate-report-btn" 
-                            data-claim-idx="${claimIdx}" 
-                            data-question-idx="${q_idx}" 
+                        <button class="btn btn-primary btn-sm generate-report-btn"
+                            data-claim-idx="${claimIdx}"
+                            data-question-idx="${q_idx}"
                             data-report-container-id="report-claim-${claimIdx}-${q_idx}">
                             Generate Report
                         </button>
@@ -536,10 +536,10 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || `External verification failed: ${response.status}`);
-            
+
             // Apply markdown and link formatting to the external verdict as well
             verdictContainer.innerHTML = formatTextWithMarkdownAndLinks(data.verdict);
-            
+
             if (data.sources && data.sources.length > 0) {
                 sourcesContainer.innerHTML = data.sources
                     .map(s => `<li>🔗 <a href="${s.url}" target="_blank" rel="noopener noreferrer">${escapeHTML(s.title)}</a></li>`)
@@ -566,7 +566,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ claim_idx: claimIdx, question_idx: questionIdx })
             });
-            
+
             if (!response.ok) {
                 const errorData = await response.json();
                 throw new Error(errorData.error || `Failed to start report generation: ${response.status}`);
@@ -581,10 +581,10 @@ document.addEventListener('DOMContentLoaded', () => {
             while (true) {
                 const { value, done } = await reader.read();
                 if (done) break;
-                
+
                 const chunk = decoder.decode(value, { stream: true });
                 const lines = chunk.split('\n\n');
-                
+
                 for (const line of lines) {
                     if (line.startsWith('data: ')) {
                         const dataPart = line.substring(6).trim();
@@ -627,7 +627,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let formattedText = text;
         // Escape HTML entities first to prevent script injection issues
         formattedText = escapeHTML(formattedText);
-        
+
         // Convert markdown bold (**) to HTML <strong>
         formattedText = formattedText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
 
@@ -637,7 +637,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Convert standalone URLs to HTML <a>
         // This regex matches http(s):// followed by non-whitespace characters
         formattedText = formattedText.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
-        
+
         // Convert newlines to <br> for proper display in HTML, but do this last
         formattedText = formattedText.replace(/\n/g, '<br>');
 
