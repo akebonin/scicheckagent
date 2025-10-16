@@ -578,24 +578,31 @@ def get_claim_details():
             raw_llm_response = res.json()["choices"][0]["message"]["content"]
             logging.info(f"Raw LLM Response: {raw_llm_response}")
             
-            # Parse JSON response safely
+            # FIX: Improved JSON parsing - extract JSON from the response
             try:
-                # Clean the response - remove any markdown code blocks
-                cleaned_response = re.sub(r'```json\s*|\s*```', '', raw_llm_response).strip()
-                parsed_data = json.loads(cleaned_response)
-                
-                verdict = parsed_data.get('verdict', 'UNKNOWN')
-                justification = parsed_data.get('justification', 'No justification provided.')
-                sources = parsed_data.get('sources', [])
-                search_keywords = parsed_data.get('keywords', [])
-                
-                # Format for display
-                model_verdict_content = f"Verdict: **{verdict}**\n\nJustification: {justification}"
-                if sources:
-                    model_verdict_content += f"\n\nSources:\n" + "\n".join(f"- {src}" for src in sources)
-                
-                # Fallback for empty keywords
-                if not search_keywords:
+                # Look for JSON pattern in the response
+                json_match = re.search(r'\{.*\}', raw_llm_response, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group()
+                    parsed_data = json.loads(json_str)
+                    
+                    verdict = parsed_data.get('verdict', 'UNKNOWN')
+                    justification = parsed_data.get('justification', 'No justification provided.')
+                    sources = parsed_data.get('sources', [])
+                    search_keywords = parsed_data.get('keywords', [])
+                    
+                    # Format for display
+                    model_verdict_content = f"Verdict: **{verdict}**\n\nJustification: {justification}"
+                    if sources:
+                        model_verdict_content += f"\n\nSources:\n" + "\n".join(f"- {src}" for src in sources)
+                    
+                    # Fallback for empty keywords
+                    if not search_keywords:
+                        words = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text)
+                        search_keywords = words[:5] if words else [claim_text]
+                else:
+                    # No JSON found, use raw response
+                    model_verdict_content = raw_llm_response
                     words = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text)
                     search_keywords = words[:5] if words else [claim_text]
                     
