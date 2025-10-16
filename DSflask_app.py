@@ -581,15 +581,17 @@ def get_claim_details():
             raw_llm_response = res.json()["choices"][0]["message"]["content"]
             logging.info(f"Raw LLM Response: {raw_llm_response}")
             
-            # FIX: Improved JSON parsing - extract JSON from the response
+            # FIX: Robust JSON parsing with fixes and regex fallback
             try:
                 # Look for JSON pattern in the response
                 json_match = re.search(r'\{.*\}', raw_llm_response, re.DOTALL)
                 if json_match:
                     json_str = json_match.group()
-                    parsed_data = json.loads(json_str)
+                    # Attempt to fix common malformities (e.g., unquoted keys like "verdict": -> "verdict":)
+                    json_str_fixed = re.sub(r'(\n\s*)("?\w+"?)\s*:', r'\1"\2":', json_str)  # Ensure keys are quoted
+                    parsed_data = json.loads(json_str_fixed)
                     
-                    verdict = parsed_data.get('verdict', 'UNKNOWN')
+                    verdict = parsed_data.get('verdict', 'INCONCLUSIVE')
                     justification = parsed_data.get('justification', 'No justification provided.')
                     sources = parsed_data.get('sources', [])
                     search_keywords = parsed_data.get('keywords', [])
@@ -601,24 +603,43 @@ def get_claim_details():
                     
                     # Fallback for empty keywords
                     if not search_keywords:
-                        words = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text)
-                        search_keywords = words[:5] if words else [claim_text]
+                        words = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text.lower())
+                        search_keywords = list(set(words[:5]))  # Unique, lowercase for better search
                 else:
-                    # No JSON found, use raw response
-                    model_verdict_content = raw_llm_response
-                    words = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text)
-                    search_keywords = words[:5] if words else [claim_text]
+                    # No JSON found, fallback to regex extraction
+                    raise json.JSONDecodeError("No JSON block found", "", 0)
                     
             except json.JSONDecodeError as e:
-                logging.warning(f"JSON parsing failed, using raw response: {e}")
-                model_verdict_content = raw_llm_response
-                words = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text)
-                search_keywords = words[:5] if words else [claim_text]
+                logging.warning(f"JSON parsing failed, falling back to regex extraction: {e}")
+                # Regex fallback: Extract first matching verdict and keywords from raw text
+                verdict_match = re.search(r'(VERIFIED|PARTIALLY_SUPPORTED|INCONCLUSIVE|CONTRADICTED|SUPPORTED|NOT_SUPPORTED|FEASIBLE|POSSIBLE_BUT_UNPROVEN|UNLIKELY|NONSENSE)', raw_llm_response, re.IGNORECASE)
+                verdict = verdict_match.group(1).upper() if verdict_match else 'INCONCLUSIVE'
                 
-        except Exception as e:
-            logging.error(f"Failed to process LLM response: {e}")
-            model_verdict_content = f"Error generating verdict: {str(e)}"
-            search_keywords = [claim_text]
+                # Extract justification (first substantial paragraph-like text)
+                justification_match = re.search(r'(justification|explanation)[:\s]*([^\n]{50,1000})', raw_llm_response, re.IGNORECASE | re.DOTALL)
+                justification = justification_match.group(2).strip()[:1000] if justification_match else 'Justification could not be parsed from response.'
+                
+                # Extract sources (URLs)
+                sources = re.findall(r'(https?://[^\s,)]+)', raw_llm_response)
+                
+                # Extract keywords (3-5 terms after "keywords:" or comma-separated)
+                keywords_match = re.search(r'(keywords?[:\s,]*)([\w\s,-]{10,})', raw_llm_response, re.IGNORECASE)
+                if keywords_match:
+                    kw_text = keywords_match.group(2).strip()
+                    search_keywords = [kw.strip().lower() for kw in re.split(r'[,;\s]+', kw_text) if len(kw.strip()) > 3][:5]
+                else:
+                    # Ultimate fallback: extract from claim
+                    words = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text.lower())
+                    search_keywords = list(set(words[:5]))  # Unique
+                
+                model_verdict_content = f"Verdict: **{verdict}**\n\nJustification: {justification}"
+                if sources:
+                    model_verdict_content += f"\n\nSources:\n" + "\n".join(f"- {src}" for src in sources[:2])
+                
+            except Exception as parse_e:
+                logging.error(f"Unexpected parsing error: {parse_e}")
+                model_verdict_content = raw_llm_response
+                search_keywords = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text.lower())[:5]
         
         # Generate questions
         try:
