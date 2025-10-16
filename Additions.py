@@ -1,125 +1,207 @@
-# Add to imports section
-import base64
-from PIL import Image
-import pytesseract
+# Database setup for session storage - PROPER IMPLEMENTATION
+def init_db():
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS analysis_sessions (
+            session_id TEXT PRIMARY KEY,
+            article_data TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-# Add after the existing helper functions
+def store_analysis(session_id, article_data):
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('''
+        INSERT OR REPLACE INTO analysis_sessions 
+        (session_id, article_data, last_accessed)
+        VALUES (?, ?, ?)
+    ''', (session_id, json.dumps(article_data), datetime.now()))
+    conn.commit()
+    conn.close()
 
-def analyze_image_with_ocr(image_path):
-    """Extract text from image using OCR"""
+def get_analysis(session_id):
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('''
+        SELECT article_data FROM analysis_sessions 
+        WHERE session_id = ? AND last_accessed > ?
+    ''', (session_id, datetime.now() - timedelta(hours=24)))
+    result = c.fetchone()
+    conn.close()
+    return json.loads(result[0]) if result else None
+
+def update_access_time(session_id):
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('''
+        UPDATE analysis_sessions SET last_accessed = ? 
+        WHERE session_id = ?
+    ''', (datetime.now(), session_id))
+    conn.commit()
+    conn.close()
+
+# Initialize database on startup
+init_db()
+
+# FIXED: Enhanced verification prompts with better JSON structure
+BASE_JSON_STRUCTURE = '''
+Provide a JSON response with this exact structure:
+
+{
+    "verdict": "VERIFIED|PARTIALLY_SUPPORTED|INCONCLUSIVE|CONTRADICTED|SUPPORTED|NOT_SUPPORTED|FEASIBLE|POSSIBLE_BUT_UNPROVEN|UNLIKELY|NONSENSE",
+    "justification": "Concise explanation under 1000 characters...",
+    "sources": ["url1", "url2"] or [],
+    "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]
+}
+
+STRICT RULES:
+- Verdict MUST match one of the specified options for this analysis mode
+- Justification max 1000 characters  
+- Sources: 1-2 relevant URLs or empty array
+- Keywords: 3-5 relevant scientific/technical search terms
+- Output ONLY valid JSON, no additional text
+'''
+
+verification_prompts = {
+    "General Analysis of Testable Claims": f'''
+Analyze this claim and provide a JSON response:
+{BASE_JSON_STRUCTURE}
+
+Claim: "{{claim}}"
+
+JSON Response:
+''',
+
+    "Specific Focus on Scientific Claims": f'''
+Analyze this scientific claim and provide a JSON response:
+{BASE_JSON_STRUCTURE}
+
+Claim: "{{claim}}"
+
+JSON Response:
+''',
+
+    "Technology-Focused Extraction": f'''
+Evaluate this technology claim and provide a JSON response:
+{BASE_JSON_STRUCTURE}
+
+Claim: "{{claim}}"
+
+JSON Response:
+'''
+}
+
+# FIXED: Completely rewrite the get_claim_details function
+@app.route("/api/get-claim-details", methods=["POST"])
+def get_claim_details():
     try:
-        # Use Tesseract OCR to extract text from image
-        extracted_text = pytesseract.image_to_string(Image.open(image_path))
-        return extracted_text.strip()
-    except Exception as e:
-        logging.error(f"OCR processing failed: {e}")
-        return ""
-
-def transcribe_video(video_path):
-    """Transcribe video using TurboScribe API or similar service"""
-    # This is a placeholder - you'll need to implement actual video transcription
-    # For now, we'll return a message about the feature
-    logging.info(f"Video transcription called for: {video_path}")
-    return "Video transcription feature requires TurboScribe API integration. Please paste the text manually for now."
-
-def save_uploaded_file(file, upload_folder="/home/scicheckagent/mysite/uploads"):
-    """Save uploaded file and return path"""
-    try:
-        os.makedirs(upload_folder, exist_ok=True)
-        filename = str(uuid.uuid4()) + "_" + file.filename
-        filepath = os.path.join(upload_folder, filename)
-        file.save(filepath)
-        return filepath
-    except Exception as e:
-        logging.error(f"Error saving uploaded file: {e}")
-        return None
-
-# Add new API endpoints after existing endpoints
-
-@app.route("/api/process-image", methods=["POST"])
-def process_image():
-    """Process uploaded image and extract text using OCR"""
-    try:
-        if 'image' not in request.files:
-            return jsonify({"error": "No image file provided"}), 400
+        claim_idx = request.json.get("claim_idx")
+        current_article_id = session.get('current_article_id')
         
-        image_file = request.files['image']
-        if image_file.filename == '':
-            return jsonify({"error": "No image file selected"}), 400
+        if not current_article_id:
+            return jsonify({"error": "Analysis context missing. Please re-run analysis."}), 400
         
-        # Save the uploaded image
-        image_path = save_uploaded_file(image_file)
-        if not image_path:
-            return jsonify({"error": "Failed to save image"}), 500
+        # Get data from database
+        article_cache_data = get_analysis(current_article_id)
+        if not article_cache_data:
+            return jsonify({"error": "Analysis session expired or not found."}), 400
         
-        # Extract text using OCR
-        extracted_text = analyze_image_with_ocr(image_path)
+        claims_data_in_cache = article_cache_data.get('claims_data', [])
         
-        # Clean up the uploaded file
+        if claim_idx is None or claim_idx >= len(claims_data_in_cache):
+            return jsonify({"error": "Invalid claim index."}), 400
+        
+        claim_item_in_cache = claims_data_in_cache[claim_idx]
+        claim_text = claim_item_in_cache['text']
+        
+        # FIX: Safely get the analysis mode with validation
+        current_analysis_mode = article_cache_data.get('mode')
+        logging.info(f"Current analysis mode: {current_analysis_mode}")
+        
+        # Validate the analysis mode
+        if not current_analysis_mode or current_analysis_mode not in verification_prompts:
+            logging.warning(f"Invalid analysis mode: {current_analysis_mode}. Using default.")
+            current_analysis_mode = 'General Analysis of Testable Claims'
+        
+        # If already cached, return immediately
+        if "model_verdict" in claim_item_in_cache and "questions" in claim_item_in_cache:
+            return jsonify({
+                "model_verdict": claim_item_in_cache["model_verdict"],
+                "questions": claim_item_in_cache["questions"],
+                "search_keywords": claim_item_in_cache.get("search_keywords", [])
+            })
+        
+        # Generate verdict with proper error handling
+        verdict_prompt = verification_prompts[current_analysis_mode].format(claim=claim_text)
+        model_verdict_content = "Could not generate model verdict."
+        questions = []
+        search_keywords = []
+        
         try:
-            os.remove(image_path)
-        except:
-            pass
+            logging.info(f"Calling OpenRouter for model verdict for claim {claim_idx}...")
+            res = call_openrouter(verdict_prompt)
+            raw_llm_response = res.json()["choices"][0]["message"]["content"]
+            logging.info(f"Raw LLM Response: {raw_llm_response}")
+            
+            # Parse JSON response safely
+            try:
+                # Clean the response - remove any markdown code blocks
+                cleaned_response = re.sub(r'```json\s*|\s*```', '', raw_llm_response).strip()
+                parsed_data = json.loads(cleaned_response)
+                
+                verdict = parsed_data.get('verdict', 'UNKNOWN')
+                justification = parsed_data.get('justification', 'No justification provided.')
+                sources = parsed_data.get('sources', [])
+                search_keywords = parsed_data.get('keywords', [])
+                
+                # Format for display
+                model_verdict_content = f"Verdict: **{verdict}**\n\nJustification: {justification}"
+                if sources:
+                    model_verdict_content += f"\n\nSources:\n" + "\n".join(f"- {src}" for src in sources)
+                
+                # Fallback for empty keywords
+                if not search_keywords:
+                    words = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text)
+                    search_keywords = words[:5] if words else [claim_text]
+                    
+            except json.JSONDecodeError as e:
+                logging.warning(f"JSON parsing failed, using raw response: {e}")
+                model_verdict_content = raw_llm_response
+                words = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text)
+                search_keywords = words[:5] if words else [claim_text]
+                
+        except Exception as e:
+            logging.error(f"Failed to process LLM response: {e}")
+            model_verdict_content = f"Error generating verdict: {str(e)}"
+            search_keywords = [claim_text]
         
-        if not extracted_text:
-            return jsonify({"error": "Could not extract text from image. Please ensure the image contains clear text."}), 400
-        
-        return jsonify({"extracted_text": extracted_text})
-        
-    except Exception as e:
-        logging.error(f"Error in process_image endpoint: {e}")
-        return jsonify({"error": f"Failed to process image: {str(e)}"}), 500
-
-@app.route("/api/process-video", methods=["POST"])
-def process_video():
-    """Process uploaded video and extract transcription"""
-    try:
-        if 'video' not in request.files:
-            return jsonify({"error": "No video file provided"}), 400
-        
-        video_file = request.files['video']
-        if video_file.filename == '':
-            return jsonify({"error": "No video file selected"}), 400
-        
-        # Save the uploaded video
-        video_path = save_uploaded_file(video_file)
-        if not video_path:
-            return jsonify({"error": "Failed to save video"}), 500
-        
-        # Transcribe video (placeholder implementation)
-        transcription = transcribe_video(video_path)
-        
-        # Clean up the uploaded file
+        # Generate questions
         try:
-            os.remove(video_path)
-        except:
-            pass
+            questions = generate_questions_for_claim(claim_text)
+        except Exception as e:
+            logging.error(f"Failed to generate questions: {e}")
+            questions = ["Could not generate research questions"]
         
-        return jsonify({"transcription": transcription, "note": "Video transcription requires TurboScribe API integration. Please paste the text manually for now."})
+        # Store results in database
+        claim_item_in_cache["model_verdict"] = model_verdict_content
+        claim_item_in_cache["questions"] = questions
+        claim_item_in_cache["search_keywords"] = search_keywords
         
-    except Exception as e:
-        logging.error(f"Error in process_video endpoint: {e}")
-        return jsonify({"error": f"Failed to process video: {str(e)}"}), 500
-
-@app.route("/api/transcribe-video-url", methods=["POST"])
-def transcribe_video_url():
-    """Transcribe video from URL using TurboScribe API"""
-    try:
-        data = request.json
-        video_url = data.get("video_url")
-        
-        if not video_url:
-            return jsonify({"error": "No video URL provided"}), 400
-        
-        # Placeholder for TurboScribe API integration
-        # You would need to implement actual API call to TurboScribe
-        logging.info(f"Video URL transcription requested for: {video_url}")
+        # Update database
+        store_analysis(current_article_id, article_cache_data)
+        update_access_time(current_article_id)
         
         return jsonify({
-            "transcription": "Video URL transcription requires TurboScribe API integration. Please paste the text manually for now.",
-            "note": "This feature requires TurboScribe API key and proper integration."
+            "model_verdict": model_verdict_content,
+            "questions": questions,
+            "search_keywords": search_keywords
         })
         
     except Exception as e:
-        logging.error(f"Error in transcribe_video_url endpoint: {e}")
-        return jsonify({"error": f"Failed to transcribe video URL: {str(e)}"}), 500
+        logging.error(f"Error in get_claim_details: {e}")
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
