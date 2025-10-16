@@ -103,61 +103,25 @@ BASE_EXTRACTION_RULES = '''
 
 BASE_JSON_STRUCTURE = '''
 Provide a JSON response with this exact structure:
+
 {
-  "verdict": "VERIFIED|PARTIALLY_SUPPORTED|INCONCLUSIVE|CONTRADICTED|SUPPORTED|NOT_SUPPORTED|FEASIBLE|POSSIBLE_BUT_UNPROVEN|UNLIKELY|NONSENSE",
-  "justification": "Concise explanation under 1000 characters...",
-  "sources": ["url1", "url2"] or [],
-  "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]
+    "verdict": "VERIFIED|PARTIALLY_SUPPORTED|INCONCLUSIVE|CONTRADICTED|SUPPORTED|NOT_SUPPORTED|FEASIBLE|POSSIBLE_BUT_UNPROVEN|UNLIKELY|NONSENSE",
+    "justification": "Concise explanation under 1000 characters...",
+    "sources": ["url1", "url2"] or [],
+    "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]
 }
 
 STRICT RULES:
 - Verdict MUST match one of the specified options for this analysis mode
-- Justification max 1000 characters
+- Justification max 1000 characters  
 - Sources: 1-2 relevant URLs or empty array
 - Keywords: 3-5 relevant scientific/technical search terms
 - Output ONLY valid JSON, no additional text
 '''
 
-# Prompt templates
-extraction_templates = {
-    "General Analysis of Testable Claims": f'''
-You will be given a text. Extract a **numbered list** of explicit, scientifically testable claims.
-
-{BASE_EXTRACTION_RULES}
-
-TEXT:
-{{text}}
-
-OUTPUT:
-''',
-
-    "Specific Focus on Scientific Claims": f'''
-You will be given a text. Extract a **numbered list** of explicit, scientifically testable claims related to science.
-
-{BASE_EXTRACTION_RULES}
-
-TEXT:
-{{text}}
-
-OUTPUT:
-''',
-
-    "Technology-Focused Extraction": f'''
-You will be given a text. Extract a **numbered list** of explicit, testable claims related to technology.
-
-{BASE_EXTRACTION_RULES}
-
-TEXT:
-{{text}}
-
-OUTPUT:
-'''
-}
-
 verification_prompts = {
     "General Analysis of Testable Claims": f'''
 Analyze this claim and provide a JSON response:
-
 {BASE_JSON_STRUCTURE}
 
 Claim: "{{claim}}"
@@ -167,7 +131,6 @@ JSON Response:
 
     "Specific Focus on Scientific Claims": f'''
 Analyze this scientific claim and provide a JSON response:
-
 {BASE_JSON_STRUCTURE}
 
 Claim: "{{claim}}"
@@ -177,7 +140,6 @@ JSON Response:
 
     "Technology-Focused Extraction": f'''
 Evaluate this technology claim and provide a JSON response:
-
 {BASE_JSON_STRUCTURE}
 
 Claim: "{{claim}}"
