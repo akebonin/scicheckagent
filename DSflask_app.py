@@ -871,6 +871,29 @@ def transcribe_video_url():
         logging.error(f"Error in transcribe_video_url endpoint: {e}")
         return jsonify({"error": f"Failed to transcribe video URL: {str(e)}"}), 500
 
+@app.route("/debug-db")
+def debug_db():
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('SELECT session_id, article_data FROM analysis_sessions ORDER BY last_accessed DESC LIMIT 5')
+    results = c.fetchall()
+    conn.close()
+    
+    debug_info = []
+    for session_id, article_data in results:
+        try:
+            data = json.loads(article_data)
+            debug_info.append({
+                'session_id': session_id,
+                'mode': data.get('mode'),
+                'text_preview': data.get('text', '')[:100] + '...' if data.get('text') else None,
+                'claims_count': len(data.get('claims_data', []))
+            })
+        except:
+            debug_info.append({'session_id': session_id, 'error': 'Failed to parse'})
+    
+    return jsonify(debug_info)
+
 @app.route("/api/generate-report", methods=["POST"])
 def generate_report():
     claim_idx = request.json.get("claim_idx")
