@@ -183,8 +183,8 @@ JSON Response:
 
 # Helper functions
 
-def call_openrouter(prompt, stream=False, temperature=0.2):
-    """Calls the OpenRouter API, supports streaming."""
+def call_openrouter(prompt, stream=False, temperature=0.2, json_mode=False):
+    """Calls the OpenRouter API, supports streaming and JSON mode."""
     if not OPENROUTER_API_KEY:
         raise Exception("OPENROUTER_API_KEY is not set in environment variables.")
 
@@ -194,11 +194,14 @@ def call_openrouter(prompt, stream=False, temperature=0.2):
     }
 
     payload = {
-        "model": "mistralai/mistral-7b-instruct:free",
+        "model": "google/gemini-2.0-flash-exp:free",  # Or whichever model; update as needed
         "messages": [{"role": "user", "content": prompt}],
         "stream": stream,
         "temperature": temperature
     }
+
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
 
     try:
         response = requests.post(OR_URL, headers=headers, json=payload, stream=stream, timeout=90)
@@ -574,7 +577,7 @@ def get_claim_details():
         
         try:
             logging.info(f"Calling OpenRouter for model verdict for claim {claim_idx}...")
-            res = call_openrouter(verdict_prompt)
+            res = call_openrouter(verdict_prompt, json_mode=True)
             raw_llm_response = res.json()["choices"][0]["message"]["content"]
             logging.info(f"Raw LLM Response: {raw_llm_response}")
             
