@@ -552,7 +552,7 @@ def get_claim_details():
         claim_item_in_cache = claims_data_in_cache[claim_idx]
         claim_text = claim_item_in_cache['text']
         
-        # FIX: Safely get the analysis mode with validation
+        # Safely get the analysis mode with validation
         current_analysis_mode = article_cache_data.get('mode')
         logging.info(f"Current analysis mode: {current_analysis_mode}")
         
@@ -581,7 +581,7 @@ def get_claim_details():
             raw_llm_response = res.json()["choices"][0]["message"]["content"]
             logging.info(f"Raw LLM Response: {raw_llm_response}")
             
-            # FIX: Robust JSON parsing with fixes and regex fallback
+            # Robust JSON parsing with fixes and regex fallback
             try:
                 # Look for JSON pattern in the response
                 json_match = re.search(r'\{.*\}', raw_llm_response, re.DOTALL)
@@ -640,6 +640,11 @@ def get_claim_details():
                 logging.error(f"Unexpected parsing error: {parse_e}")
                 model_verdict_content = raw_llm_response
                 search_keywords = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text.lower())[:5]
+        
+        except Exception as e:
+            logging.error(f"Failed to process LLM response: {e}")
+            model_verdict_content = f"Error generating verdict: {str(e)}"
+            search_keywords = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text.lower())[:5]
         
         # Generate questions
         try:
