@@ -55,7 +55,7 @@ def store_analysis(session_id, article_data):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        INSERT OR REPLACE INTO analysis_sessions
+        INSERT OR REPLACE INTO analysis_sessions 
         (session_id, article_data, last_accessed)
         VALUES (?, ?, ?)
     ''', (session_id, json.dumps(article_data), datetime.now()))
@@ -66,7 +66,7 @@ def get_analysis(session_id):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        SELECT article_data FROM analysis_sessions
+        SELECT article_data FROM analysis_sessions 
         WHERE session_id = ? AND last_accessed > ?
     ''', (session_id, datetime.now() - timedelta(hours=24)))
     result = c.fetchone()
@@ -77,7 +77,7 @@ def update_access_time(session_id):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        UPDATE analysis_sessions SET last_accessed = ?
+        UPDATE analysis_sessions SET last_accessed = ? 
         WHERE session_id = ?
     ''', (datetime.now(), session_id))
     conn.commit()
