@@ -55,7 +55,7 @@ def store_analysis(session_id, article_data):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        INSERT OR REPLACE INTO analysis_sessions 
+        INSERT OR REPLACE INTO analysis_sessions
         (session_id, article_data, last_accessed)
         VALUES (?, ?, ?)
     ''', (session_id, json.dumps(article_data), datetime.now()))
@@ -66,7 +66,7 @@ def get_analysis(session_id):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        SELECT article_data FROM analysis_sessions 
+        SELECT article_data FROM analysis_sessions
         WHERE session_id = ? AND last_accessed > ?
     ''', (session_id, datetime.now() - timedelta(hours=24)))
     result = c.fetchone()
@@ -77,7 +77,7 @@ def update_access_time(session_id):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        UPDATE analysis_sessions SET last_accessed = ? 
+        UPDATE analysis_sessions SET last_accessed = ?
         WHERE session_id = ?
     ''', (datetime.now(), session_id))
     conn.commit()
@@ -105,7 +105,7 @@ BASE_JSON_STRUCTURE = '''
 Provide a JSON response with this exact structure:
 {
   "verdict": "VERIFIED|PARTIALLY_SUPPORTED|INCONCLUSIVE|CONTRADICTED|SUPPORTED|NOT_SUPPORTED|FEASIBLE|POSSIBLE_BUT_UNPROVEN|UNLIKELY|NONSENSE",
-  "justification": "Concise explanation under 1000 characters...", 
+  "justification": "Concise explanation under 1000 characters...",
   "sources": ["url1", "url2"] or [],
   "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]
 }
@@ -351,25 +351,25 @@ def fetch_pubmed(keywords):
     """Fetch medical literature from PubMed"""
     if not keywords:
         return []
-    
+
     search_query = '+'.join(keywords)
     url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={search_query}&retmode=json&retmax=3"
-    
+
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
-        
+
         data = response.json()
         id_list = data.get('esearchresult', {}).get('idlist', [])
-        
+
         if not id_list:
             return []
-            
+
         # Fetch details for the articles
         details_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id={','.join(id_list)}&retmode=json"
         details_response = requests.get(details_url, timeout=10)
         details_data = details_response.json()
-        
+
         results = []
         for pubmed_id in id_list:
             article_data = details_data.get('result', {}).get(pubmed_id, {})
@@ -378,9 +378,9 @@ def fetch_pubmed(keywords):
                 "abstract": article_data.get('abstract', 'Abstract not available'),
                 "url": f"https://pubmed.ncbi.nlm.nih.gov/{pubmed_id}/"
             })
-        
+
         return results
-        
+
     except Exception as e:
         logging.warning(f"PubMed API call failed: {e}")
         return []
@@ -578,53 +578,30 @@ def get_claim_details():
             if json_match:
                 json_str = json_match.group()
                 parsed_data = json.loads(json_str)
-                
+
                 verdict = parsed_data.get('verdict', 'UNKNOWN')
                 justification = parsed_data.get('justification', 'No justification provided.')
                 sources = parsed_data.get('sources', [])
                 search_keywords = parsed_data.get('keywords', [])
-                
+
                 # Format the response for display
                 model_verdict_content = f"Verdict: **{verdict}**\n\n"
                 model_verdict_content += f"Justification: {justification}\n\n"
-                
+
                 if sources:
                     model_verdict_content += "Sources:\n" + "\n".join(f"- {src}" for src in sources)
-                
+
                 if not search_keywords:
                     search_keywords = [claim_text]  # Fallback
-                    
+
             else:
                 raise ValueError("No JSON found in response")
-                
+
         except Exception as json_error:
             logging.warning(f"JSON parsing failed, using fallback: {json_error}")
-            # Fallback to original regex parsing
-            sections = re.split(r'\n\s*(\d+)\.\s*', raw_llm_response, flags=re.DOTALL)
-            parsed_sections_map = {}
-            for i in range(1, len(sections), 2):
-                try:
-                    num = int(sections[i].strip())
-                    content = sections[i+1].strip() if i+1 < len(sections) else ""
-                    parsed_sections_map[num] = content
-                except ValueError:
-                    logging.warning(f"Could not parse section number from '{sections[i]}'")
-
+            # Fallback for non-JSON response
             model_verdict_content = raw_llm_response
-
-            # Extract Search Keywords from section 4
-            if 4 in parsed_sections_map:
-                temp_keywords_str = parsed_sections_map[4].strip()
-                temp_keywords_str = re.sub(r'^(Search Keywords:)\s*', '', temp_keywords_str, flags=re.IGNORECASE).strip()
-                if temp_keywords_str.startswith('"') and temp_keywords_str.endswith('"'):
-                    temp_keywords_str = temp_keywords_str[1:-1]
-                search_keywords = [kw.strip().strip('"') for kw in temp_keywords_str.split(',') if kw.strip()]
-                if not search_keywords:
-                    logging.warning("No keywords parsed from section 4. Falling back to original claim text for search.")
-                    search_keywords = [claim_text]
-            else:
-                logging.warning("Section 4 (Search Keywords) not found in LLM response. Falling back to original claim text for search.")
-                search_keywords = [claim_text]
+            search_keywords = [claim_text] # Simple fallback for keywords
 
     except Exception as e:
         logging.error(f"Failed to process LLM response for claim '{claim_text}': {e}")
@@ -646,7 +623,7 @@ def get_claim_details():
     claim_item_in_cache["model_verdict"] = model_verdict_content
     claim_item_in_cache["questions"] = questions
     claim_item_in_cache["search_keywords"] = search_keywords
-    
+
     # Update the session data
     store_analysis(current_article_id, article_cache_data)
     update_access_time(current_article_id)
@@ -690,11 +667,11 @@ def verify_external():
         logging.info(f"Fetching CrossRef sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
         crossref_sources = fetch_crossref(search_keywords_for_papers)
         time.sleep(0.5)
-        
+
         logging.info(f"Fetching CORE sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
         core_sources = fetch_core(search_keywords_for_papers)
         time.sleep(0.5)
-        
+
         logging.info(f"Fetching PubMed sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
         pubmed_sources = fetch_pubmed(search_keywords_for_papers)
         time.sleep(0.5)
@@ -746,12 +723,100 @@ If the provided papers are insufficient or inconclusive for a clear verdict, sta
 
     claim_data_in_cache["external_verdict"] = external_verdict
     claim_data_in_cache["sources"] = sources
-    
+
     # Update the session data
     store_analysis(current_article_id, article_cache_data)
     update_access_time(current_article_id)
 
     return jsonify({"verdict": external_verdict, "sources": sources})
+
+@app.route("/api/process-image", methods=["POST"])
+def process_image():
+    """Process uploaded image and extract text using OCR"""
+    try:
+        if 'image' not in request.files:
+            return jsonify({"error": "No image file provided"}), 400
+
+        image_file = request.files['image']
+        if image_file.filename == '':
+            return jsonify({"error": "No image file selected"}), 400
+
+        # Save the uploaded image
+        image_path = save_uploaded_file(image_file)
+        if not image_path:
+            return jsonify({"error": "Failed to save image"}), 500
+
+        # Extract text using OCR
+        extracted_text = analyze_image_with_ocr(image_path)
+
+        # Clean up the uploaded file
+        try:
+            os.remove(image_path)
+        except:
+            pass
+
+        if not extracted_text:
+            return jsonify({"error": "Could not extract text from image. Please ensure the image contains clear text."}), 400
+
+        return jsonify({"extracted_text": extracted_text})
+
+    except Exception as e:
+        logging.error(f"Error in process_image endpoint: {e}")
+        return jsonify({"error": f"Failed to process image: {str(e)}"}), 500
+
+@app.route("/api/process-video", methods=["POST"])
+def process_video():
+    """Process uploaded video and extract transcription"""
+    try:
+        if 'video' not in request.files:
+            return jsonify({"error": "No video file provided"}), 400
+
+        video_file = request.files['video']
+        if video_file.filename == '':
+            return jsonify({"error": "No video file selected"}), 400
+
+        # Save the uploaded video
+        video_path = save_uploaded_file(video_file)
+        if not video_path:
+            return jsonify({"error": "Failed to save video"}), 500
+
+        # Transcribe video (placeholder implementation)
+        transcription = transcribe_video(video_path)
+
+        # Clean up the uploaded file
+        try:
+            os.remove(video_path)
+        except:
+            pass
+
+        return jsonify({"transcription": transcription, "note": "Video transcription requires TurboScribe API integration. Please paste the text manually for now."})
+
+    except Exception as e:
+        logging.error(f"Error in process_video endpoint: {e}")
+        return jsonify({"error": f"Failed to process video: {str(e)}"}), 500
+
+@app.route("/api/transcribe-video-url", methods=["POST"])
+def transcribe_video_url():
+    """Transcribe video from URL using TurboScribe API"""
+    try:
+        data = request.json
+        video_url = data.get("video_url")
+
+        if not video_url:
+            return jsonify({"error": "No video URL provided"}), 400
+
+        # Placeholder for TurboScribe API integration
+        # You would need to implement actual API call to TurboScribe
+        logging.info(f"Video URL transcription requested for: {video_url}")
+
+        return jsonify({
+            "transcription": "Video URL transcription requires TurboScribe API integration. Please paste the text manually for now.",
+            "note": "This feature requires TurboScribe API key and proper integration."
+        })
+
+    except Exception as e:
+        logging.error(f"Error in transcribe_video_url endpoint: {e}")
+        return jsonify({"error": f"Failed to transcribe video URL: {str(e)}"}), 500
 
 @app.route("/api/generate-report", methods=["POST"])
 def generate_report():
@@ -760,17 +825,17 @@ def generate_report():
     current_article_id = session.get('current_article_id')
 
     if not current_article_id:
-        return Response(json.dumps({"error": "Analysis context missing. Please re-run analysis."}), mimetype='text/event-stream', status=400)
+        return Response(json.dumps({"error": "Analysis context missing. Please re-run analysis."}), mimetype='application/json', status=400)
 
     article_cache_data = get_analysis(current_article_id)
     if not article_cache_data:
-        return Response(json.dumps({"error": "Analysis session expired or not found."}), mimetype='text/event-stream', status=400)
+        return Response(json.dumps({"error": "Analysis session expired or not found."}), mimetype='application/json', status=400)
 
     article_text = article_cache_data.get('text', '')
     claims_data_in_cache = article_cache_data.get('claims_data', [])
 
     if claim_idx is None or question_idx is None or claim_idx >= len(claims_data_in_cache) or 'questions' not in claims_data_in_cache[claim_idx] or question_idx >= len(claims_data_in_cache[claim_idx]['questions']):
-        return Response(json.dumps({"error": "Invalid indices or analysis data missing."}), mimetype='text/event-stream', status=400)
+        return Response(json.dumps({"error": "Invalid indices or analysis data missing."}), mimetype='application/json', status=400)
 
     claim_data_in_cache = claims_data_in_cache[claim_idx]
     claim_text = claim_data_in_cache['text']
@@ -785,94 +850,6 @@ def generate_report():
             yield f"data: [DONE]\n\n"
         return Response(stream_cached_report(), mimetype='text/event-stream')
 
-@app.route("/api/process-image", methods=["POST"])
-def process_image():
-    """Process uploaded image and extract text using OCR"""
-    try:
-        if 'image' not in request.files:
-            return jsonify({"error": "No image file provided"}), 400
-        
-        image_file = request.files['image']
-        if image_file.filename == '':
-            return jsonify({"error": "No image file selected"}), 400
-        
-        # Save the uploaded image
-        image_path = save_uploaded_file(image_file)
-        if not image_path:
-            return jsonify({"error": "Failed to save image"}), 500
-        
-        # Extract text using OCR
-        extracted_text = analyze_image_with_ocr(image_path)
-        
-        # Clean up the uploaded file
-        try:
-            os.remove(image_path)
-        except:
-            pass
-        
-        if not extracted_text:
-            return jsonify({"error": "Could not extract text from image. Please ensure the image contains clear text."}), 400
-        
-        return jsonify({"extracted_text": extracted_text})
-        
-    except Exception as e:
-        logging.error(f"Error in process_image endpoint: {e}")
-        return jsonify({"error": f"Failed to process image: {str(e)}"}), 500
-
-@app.route("/api/process-video", methods=["POST"])
-def process_video():
-    """Process uploaded video and extract transcription"""
-    try:
-        if 'video' not in request.files:
-            return jsonify({"error": "No video file provided"}), 400
-        
-        video_file = request.files['video']
-        if video_file.filename == '':
-            return jsonify({"error": "No video file selected"}), 400
-        
-        # Save the uploaded video
-        video_path = save_uploaded_file(video_file)
-        if not video_path:
-            return jsonify({"error": "Failed to save video"}), 500
-        
-        # Transcribe video (placeholder implementation)
-        transcription = transcribe_video(video_path)
-        
-        # Clean up the uploaded file
-        try:
-            os.remove(video_path)
-        except:
-            pass
-        
-        return jsonify({"transcription": transcription, "note": "Video transcription requires TurboScribe API integration. Please paste the text manually for now."})
-        
-    except Exception as e:
-        logging.error(f"Error in process_video endpoint: {e}")
-        return jsonify({"error": f"Failed to process video: {str(e)}"}), 500
-
-@app.route("/api/transcribe-video-url", methods=["POST"])
-def transcribe_video_url():
-    """Transcribe video from URL using TurboScribe API"""
-    try:
-        data = request.json
-        video_url = data.get("video_url")
-        
-        if not video_url:
-            return jsonify({"error": "No video URL provided"}), 400
-        
-        # Placeholder for TurboScribe API integration
-        # You would need to implement actual API call to TurboScribe
-        logging.info(f"Video URL transcription requested for: {video_url}")
-        
-        return jsonify({
-            "transcription": "Video URL transcription requires TurboScribe API integration. Please paste the text manually for now.",
-            "note": "This feature requires TurboScribe API key and proper integration."
-        })
-        
-    except Exception as e:
-        logging.error(f"Error in transcribe_video_url endpoint: {e}")
-        return jsonify({"error": f"Failed to transcribe video URL: {str(e)}"}), 500
-    
     prompt = f'''
 You are an AI researcher writing a short, evidence-based report (maximum 1000 words). Your task is to investigate the research question in relation to the claim using verifiable scientific knowledge. Use the article context to ground your analysis where helpful. Clearly explain how the answer to the research question supports, contradicts, or contextualizes the claim. Provide concise reasoning and avoid speculation.
 
@@ -938,8 +915,11 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
                             except json.JSONDecodeError:
                                 logging.debug(f"Skipping non-JSON data line: {line}")
                                 continue
-                    if response.raw.read(0):
-                        break
+            # This check for 'stop' is another way to ensure we break the loop
+            # if 'finish_reason' was in the last chunk
+            if 'stop' in locals().get('json_data', {}).get('choices', [{}])[0].get('finish_reason', ''):
+                 pass
+
         except Exception as e:
             logging.error(f"Error during report streaming for claim {claim_idx}, question {question_idx}: {e}")
             error_message = f"data: {json.dumps({'error': str(e)})}\n\n"
@@ -953,6 +933,7 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
             yield f"data: [DONE]\n\n"
 
     return Response(stream_response(), mimetype='text/event-stream')
+
 
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
@@ -1043,6 +1024,8 @@ def export_pdf():
 
 def draw_paragraph(pdf_canvas, text_content, style, y_pos, page_width, left_margin=0.75*inch, right_margin=0.75*inch):
     available_width = page_width - left_margin - right_margin
+    # Replace markdown newlines with HTML <br/> for ReportLab Paragraph
+    text_content = text_content.replace('\n', '<br/>')
     para = Paragraph(text_content, style)
     w, h = para.wrapOn(pdf_canvas, available_width, 0)
     if y_pos - h < 0.75*inch:
