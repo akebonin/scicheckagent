@@ -102,7 +102,7 @@ BASE_EXTRACTION_RULES = '''
 '''
 
 BASE_JSON_STRUCTURE = '''
-Provide a JSON response with this exact structure:
+Output exactly one valid JSON object with this structure. Do not include any additional text, code fences, or whitespace before or after the JSON.
 
 {
     "verdict": "VERIFIED|PARTIALLY_SUPPORTED|INCONCLUSIVE|CONTRADICTED|SUPPORTED|NOT_SUPPORTED|FEASIBLE|POSSIBLE_BUT_UNPROVEN|UNLIKELY|NONSENSE",
