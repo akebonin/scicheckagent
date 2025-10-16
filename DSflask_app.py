@@ -437,10 +437,6 @@ def extract_article():
 
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
-    """
-    API endpoint to extract claims ONLY.
-    Initial model verdict and questions are fetched via a separate endpoint.
-    """
     data = request.json
     text = data.get("text")
     mode = data.get("mode")
@@ -450,14 +446,19 @@ def analyze():
         return jsonify({"error": "Missing text or analysis mode."}), 400
 
     article_id = str(uuid.uuid4())
+    
+    # FIX: Make sure mode is properly stored
     session_data = {
         "text": text,
-        "mode": mode,
+        "mode": mode,  # This should be one of the keys in verification_prompts
         "use_papers": use_papers,
         "claims_data": []
     }
+    
     store_analysis(article_id, session_data)
     session['current_article_id'] = article_id
+
+    # ... rest of your analyze function ...
 
     extraction_prompt = extraction_templates[mode].format(text=text)
 
