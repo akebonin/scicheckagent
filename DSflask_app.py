@@ -183,35 +183,7 @@ JSON Response:
 
 # Helper functions
 
-def call_openrouter(prompt, stream=False, temperature=0.2, json_mode=False):
-    """Calls the OpenRouter API, supports streaming and JSON mode."""
-    if not OPENROUTER_API_KEY:
-        raise Exception("OPENROUTER_API_KEY is not set in environment variables.")
 
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "model": "openai/gpt-oss-20b:free",
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": stream,
-        "temperature": temperature
-    }
-
-    if json_mode:
-        payload["response_format"] = {"type": "json_object"}
-
-    try:
-        response = requests.post(OR_URL, headers=headers, json=payload, stream=stream, timeout=90)
-        response.raise_for_status()
-        return response
-    except requests.exceptions.RequestException as e:
-        logging.error(f"OpenRouter API call failed: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            raise Exception(f"API Error {e.response.status_code}: {e.response.text}") from e
-        raise Exception(f"Network or API connection error: {e}") from e
 
 def extract_article_from_url(url):
     """Fetch and extract article content from a URL using direct requests and BeautifulSoup."""
