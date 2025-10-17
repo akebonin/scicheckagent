@@ -290,13 +290,11 @@
                     </select>
                 </div>
 
-                <!-- Paste Text Input -->
                 <div id="paste-input-group" class="mb-3">
                     <label for="textInput" class="form-label">Paste article or post content</label>
                     <textarea id="textInput" rows="7" class="form-control" placeholder="Paste content here...">{{ prefill_claim }}</textarea>
                 </div>
 
-                <!-- URL Input -->
                 <div id="url-input-group" class="mb-3 d-none">
                     <label for="urlInput" class="form-label">Enter article URL</label>
                     <div class="input-group">
@@ -306,10 +304,8 @@
                             Fetch Article
                         </button>
                     </div>
-                    <small class="form-text text-muted">This functionality is only available for paid accounts. Paste the text manually.</small>
                 </div>
 
-                <!-- Image Upload -->
                 <div id="image-input-group" class="mb-3 d-none">
                     <label class="form-label">Upload Image with Text</label>
                     <div class="file-upload-group" id="image-upload-area">
@@ -328,11 +324,10 @@
                     </button>
                 </div>
 
-                <!-- Video Upload -->
                 <div id="video-input-group" class="mb-3 d-none">
                     <label class="form-label">Upload Video</label>
                     <div class="file-upload-group" id="video-upload-area">
-                        <div class="upload-icon">🎥</div>
+                        <div class="upload-icon">📹</div>
                         <h5>Drop video here or click to browse</h5>
                         <p class="text-muted">Supports MP4, AVI, MOV (Max 50MB)</p>
                         <input type="file" id="videoInput" class="file-input-hidden" accept="video/*">
@@ -346,7 +341,6 @@
                     </button>
                 </div>
 
-                <!-- Video URL Input -->
                 <div id="video-url-input-group" class="mb-3 d-none">
                     <label for="videoUrlInput" class="form-label">Enter Video URL</label>
                     <div class="input-group">
@@ -356,7 +350,6 @@
                             Transcribe Video
                         </button>
                     </div>
-                    <small class="form-text text-muted">Supports YouTube, Vimeo, and other video platforms (requires TurboScribe API)</small>
                 </div>
 
                 <div class="mb-4">
@@ -370,7 +363,7 @@
 
                 <div class="mb-4 form-check form-switch">
                     <input class="form-check-input" type="checkbox" id="usePapersToggle" checked>
-                    <label class="form-check-label" for="usePapersToggle">📚 Supplement with Crossref + CORE + PubMed data</label>
+                    <label class="form-check-label" for="usePapersToggle">📜 Supplement with Crossref + CORE + PubMed data</label>
                 </div>
 
                 <div class="d-grid">
@@ -386,7 +379,7 @@
 
         <div id="pdf-download-section" class="text-center mt-5 d-none">
             <div class="pdf-selection-section">
-                <h5>📄 PDF Export Selection</h5>
+                <h5>📋 PDF Export Selection</h5>
                 <p class="text-muted">Select which reports to include in the PDF download:</p>
                 <div class="form-check">
                     <input class="form-check-input" type="checkbox" id="select-all-reports" checked>
@@ -415,18 +408,18 @@
             const imageInputGroup = document.getElementById('image-input-group');
             const videoInputGroup = document.getElementById('video-input-group');
             const videoUrlInputGroup = document.getElementById('video-url-input-group');
-            
+
             const textInput = document.getElementById('textInput');
             const urlInput = document.getElementById('urlInput');
             const imageInput = document.getElementById('imageInput');
             const videoInput = document.getElementById('videoInput');
             const videoUrlInput = document.getElementById('videoUrlInput');
-            
+
             const fetchArticleBtn = document.getElementById('fetch-article-btn');
             const processImageBtn = document.getElementById('process-image-btn');
             const processVideoBtn = document.getElementById('process-video-btn');
             const transcribeVideoUrlBtn = document.getElementById('transcribe-video-url-btn');
-            
+
             const analysisForm = document.getElementById('analysis-form');
             const runAnalysisBtn = document.getElementById('run-analysis-btn');
             const resultsContainer = document.getElementById('results-container');
@@ -449,33 +442,47 @@
             function toggleLoading(button, isLoading, loadingText = '', progress = '') {
                 const spinner = button.querySelector('.spinner-border');
                 const originalText = button.dataset.originalText || button.textContent.trim();
-                button.dataset.originalText = originalText;
-                
+                if (!button.dataset.originalText) {
+                    button.dataset.originalText = originalText;
+                }
+
                 if (isLoading) {
                     button.disabled = true;
-                    spinner.classList.remove('d-none');
+                    if(spinner) spinner.classList.remove('d-none');
                     const progressText = progress ? ` (${progress})` : '';
-                    button.childNodes[button.childNodes.length - 1].textContent = ` ${loadingText}${progressText}`;
+                    // Target the text node to prevent replacing the spinner element
+                    const textNode = Array.from(button.childNodes).find(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim().length > 0);
+                    if(textNode) textNode.textContent = ` ${loadingText}${progressText}`;
                 } else {
                     button.disabled = false;
-                    spinner.classList.add('d-none');
-                    button.childNodes[button.childNodes.length - 1].textContent = ` ${originalText}`;
+                    if(spinner) spinner.classList.add('d-none');
+                    const textNode = Array.from(button.childNodes).find(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim().length > 0);
+                     if(textNode) textNode.textContent = ` ${originalText}`;
                 }
             }
 
             function escapeHTML(str) {
                 if (typeof str !== 'string') return str;
-                const div = document.createElement('div');
-                div.appendChild(document.createTextNode(str));
-                return div.innerHTML;
+                return str.replace(/[&<>"']/g, function(match) {
+                    return {
+                        '&': '&amp;',
+                        '<': '&lt;',
+                        '>': '&gt;',
+                        '"': '&quot;',
+                        "'": '&#39;'
+                    }[match];
+                });
             }
 
             function formatTextWithMarkdownAndLinks(text) {
-                let formattedText = text;
-                formattedText = escapeHTML(formattedText);
+                let formattedText = escapeHTML(text);
+                // Bold: **text**
                 formattedText = formattedText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                // Links: [text](url)
                 formattedText = formattedText.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-                formattedText = formattedText.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+                // Autolink URLs
+                formattedText = formattedText.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+                // Newlines
                 formattedText = formattedText.replace(/\n/g, '<br>');
                 return formattedText;
             }
@@ -531,7 +538,7 @@
                 if (file && file.type.startsWith('image/')) {
                     currentImageFile = file;
                     processImageBtn.disabled = false;
-                    
+
                     // Show preview
                     const reader = new FileReader();
                     reader.onload = (e) => {
@@ -583,13 +590,13 @@
                     textInput.value = data.extracted_text;
                     inputMethodSelect.value = 'paste';
                     inputMethodSelect.dispatchEvent(new Event('change'));
-                    
+
                     alert('Text successfully extracted from image! Ready for analysis.');
 
                 } catch (error) {
                     alert(`Error processing image: ${error.message}`);
                 } finally {
-                    toggleLoading(processImageBtn, false, 'Extract Text from Image');
+                    toggleLoading(processImageBtn, false);
                 }
             }
 
@@ -620,7 +627,7 @@
                 } catch (error) {
                     alert(`Error processing video: ${error.message}`);
                 } finally {
-                    toggleLoading(processVideoBtn, false, 'Transcribe Video');
+                    toggleLoading(processVideoBtn, false);
                 }
             }
 
@@ -655,7 +662,7 @@
                 } catch (error) {
                     alert(`Error transcribing video URL: ${error.message}`);
                 } finally {
-                    toggleLoading(transcribeVideoUrlBtn, false, 'Transcribe Video');
+                    toggleLoading(transcribeVideoUrlBtn, false);
                 }
             }
 
@@ -666,14 +673,6 @@
                     <div class="claim-card" id="${claimId}">
                         <h5>Claim ${index + 1}</h5>
                         <p class="claim-text mb-3">${escapeHTML(claimText)}</p>
-                        
-                        <div class="form-check mb-3">
-                            <input class="form-check-input report-checkbox" type="checkbox" 
-                                   data-claim-idx="${index}" id="checkbox-${claimId}" checked>
-                            <label class="form-check-label" for="checkbox-${claimId}">
-                                Include this claim in PDF export
-                            </label>
-                        </div>
 
                         <strong>Model Verdict:</strong>
                         <div id="model-verdict-${claimId}" class="verdict-box model-verdict-box mb-3" style="min-height: 50px;">
@@ -690,7 +689,7 @@
                         <hr>
                         <strong>External Verification (CrossRef, CORE & PubMed):</strong>
                         <div id="external-verdict-${claimId}" class="verdict-box mb-2" style="min-height: 50px;">
-                            ${usePapersToggle.checked ? 'Loading external verification...' : 'External verification is toggled off.'}
+                            ${usePapersToggle.checked ? '<span class="text-muted">Loading external verification...</span>' : 'External verification is toggled off.'}
                         </div>
                         <ul id="external-sources-${claimId}" class="source-list list-unstyled ps-3 mb-3"></ul>
                     </div>
@@ -703,20 +702,17 @@
             }
 
             async function autoLoadClaimDetails(claims) {
-                for (let index = 0; index < claims.length; index++) {
+                const promises = claims.map(async (claim, index) => {
                     const claimId = `claim-${index}`;
                     const verdictContainerId = `model-verdict-${claimId}`;
                     const questionsContainerId = `questions-list-${claimId}`;
                     const externalVerdictContainerId = `external-verdict-${claimId}`;
                     const externalSourcesContainerId = `external-sources-${claimId}`;
 
-                    // Update progress indicator
-                    toggleLoading(runAnalysisBtn, true, 'Analyzing', `Claim ${index + 1} of ${claims.length}`);
-
                     try {
                         // Load model details
                         await getModelDetails(index, verdictContainerId, questionsContainerId, null, true);
-                        
+
                         // Load external verification if enabled
                         if (usePapersToggle.checked) {
                             await verifyExternal(index, externalVerdictContainerId, externalSourcesContainerId, null, true);
@@ -724,19 +720,21 @@
                     } catch (error) {
                         console.error(`Error loading details for claim ${index}:`, error);
                     }
+                });
 
-                    // Small delay between claims to avoid rate limiting
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                for (let i = 0; i < claims.length; i++) {
+                     toggleLoading(runAnalysisBtn, true, 'Analyzing', `Claim ${i + 1} of ${claims.length}`);
+                     await promises[i];
                 }
 
-                toggleLoading(runAnalysisBtn, false, 'Run Analysis');
+                toggleLoading(runAnalysisBtn, false);
                 updatePdfSelectionList();
             }
 
             async function getModelDetails(claimIdx, verdictContainerId, questionsContainerId, button, autoLoad = false) {
                 const verdictContainer = document.getElementById(verdictContainerId);
                 const questionsList = document.getElementById(questionsContainerId);
-                
+
                 if (!autoLoad && button) {
                     toggleLoading(button, true, "Loading details...");
                 }
@@ -748,8 +746,12 @@
                         body: JSON.stringify({ claim_idx: claimIdx })
                     });
 
+                    if (!response.ok) {
+                         const errorData = await response.text(); // Get raw text to see if it's HTML
+                         throw new Error(errorData || `Failed to get claim details: ${response.status}`);
+                    }
                     const data = await response.json();
-                    if (!response.ok) throw new Error(data.error || `Failed to get claim details: ${response.status}`);
+
 
                     const formattedVerdict = formatTextWithMarkdownAndLinks(data.model_verdict);
                     verdictContainer.innerHTML = formattedVerdict;
@@ -771,7 +773,6 @@
                             `;
                             questionsList.appendChild(listItem);
 
-                            // Track generated reports for PDF selection
                             const reportId = `claim-${claimIdx}-question-${q_idx}`;
                             if (!generatedReports.find(r => r.id === reportId)) {
                                 generatedReports.push({
@@ -792,7 +793,7 @@
                     questionsList.innerHTML = `<li class="list-group-item text-danger">Could not load questions: ${error.message}</li>`;
                 } finally {
                     if (!autoLoad && button) {
-                        toggleLoading(button, false, "Get Model Details");
+                        toggleLoading(button, false);
                     }
                 }
             }
@@ -800,12 +801,12 @@
             async function verifyExternal(claimIdx, verdictContainerId, sourcesContainerId, button, autoLoad = false) {
                 const verdictContainer = document.getElementById(verdictContainerId);
                 const sourcesContainer = document.getElementById(sourcesContainerId);
-                
+
                 if (!autoLoad && button) {
                     toggleLoading(button, true, "Verifying...");
                 }
 
-                verdictContainer.textContent = 'Verifying...';
+                verdictContainer.innerHTML = '<span class="text-muted">Verifying...</span>';
                 sourcesContainer.innerHTML = '';
 
                 try {
@@ -815,14 +816,17 @@
                         body: JSON.stringify({ claim_idx: claimIdx })
                     });
 
-                    const data = await response.json();
-                    if (!response.ok) throw new Error(data.error || `External verification failed: ${response.status}`);
+                    if (!response.ok) {
+                        const errorData = await response.text();
+                        throw new Error(errorData || `External verification failed: ${response.status}`);
+                    }
 
+                    const data = await response.json();
                     verdictContainer.innerHTML = formatTextWithMarkdownAndLinks(data.verdict);
 
                     if (data.sources && data.sources.length > 0) {
                         sourcesContainer.innerHTML = data.sources
-                            .map(s => `<li>🔗 <a href="${s.url}" target="_blank" rel="noopener noreferrer">${escapeHTML(s.title)}</a></li>`)
+                            .map(s => `<li>📄 <a href="${s.url}" target="_blank" rel="noopener noreferrer">${escapeHTML(s.title)}</a></li>`)
                             .join('');
                     } else {
                         sourcesContainer.innerHTML = `<li>No external sources found.</li>`;
@@ -833,7 +837,7 @@
                     sourcesContainer.innerHTML = `<li>Could not fetch sources.</li>`;
                 } finally {
                     if (!autoLoad && button) {
-                        toggleLoading(button, false, 'Verify with Papers');
+                        toggleLoading(button, false);
                     }
                 }
             }
@@ -879,8 +883,7 @@
                                 try {
                                     const jsonData = JSON.parse(dataPart);
                                     if (jsonData.content) {
-                                        const formattedContent = formatTextWithMarkdownAndLinks(jsonData.content);
-                                        reportBox.innerHTML += formattedContent;
+                                        reportBox.innerHTML += jsonData.content.replace(/\n/g, '<br>');
                                     }
                                     if (jsonData.error) {
                                         reportBox.innerHTML += `<br><strong class="text-danger">Error: ${escapeHTML(jsonData.error)}</strong>`;
@@ -892,6 +895,10 @@
                             }
                         }
                     }
+
+                    // Re-format the entire report at the end to correctly apply markdown
+                    reportBox.innerHTML = formatTextWithMarkdownAndLinks(reportBox.textContent);
+
 
                     // Update PDF selection list when report is generated
                     updatePdfSelectionList();
@@ -907,24 +914,35 @@
 
             function updatePdfSelectionList() {
                 pdfSelectionList.innerHTML = '';
-                
-                if (generatedReports.length === 0) {
-                    pdfSelectionList.innerHTML = '<p class="text-muted">No reports generated yet. Generate reports to enable PDF export.</p>';
+
+                const anyReportGenerated = generatedReports.some(report => {
+                    const reportId = `report-claim-${report.claimIdx}-${report.questionIdx}`;
+                    const reportContainer = document.getElementById(reportId);
+                    return reportContainer && reportContainer.querySelector('.report-box') && reportContainer.querySelector('.report-box').textContent.length > 5;
+                });
+
+                if (!anyReportGenerated) {
+                    pdfSelectionList.innerHTML = '<p class="text-muted">No reports generated yet. Generate a report to enable PDF export.</p>';
+                    pdfDownloadSection.classList.add('d-none');
                     return;
                 }
 
                 generatedReports.forEach(report => {
-                    const div = document.createElement('div');
-                    div.className = 'form-check';
-                    div.innerHTML = `
-                        <input class="form-check-input report-selection" type="checkbox" 
-                               id="pdf-${report.id}" value="${report.id}" checked>
-                        <label class="form-check-label" for="pdf-${report.id}">
-                            <strong>Claim ${report.claimIdx + 1}:</strong> ${report.claimText.substring(0, 100)}...<br>
-                            <small class="text-muted">Q: ${report.questionText}</small>
-                        </label>
-                    `;
-                    pdfSelectionList.appendChild(div);
+                    const reportId = `report-claim-${report.claimIdx}-${report.questionIdx}`;
+                    const reportContainer = document.getElementById(reportId);
+                    if (reportContainer && reportContainer.querySelector('.report-box') && reportContainer.querySelector('.report-box').textContent.length > 5) {
+                        const div = document.createElement('div');
+                        div.className = 'form-check';
+                        div.innerHTML = `
+                            <input class="form-check-input report-selection" type="checkbox"
+                                   id="pdf-${report.id}" value="${report.id}" checked>
+                            <label class="form-check-label" for="pdf-${report.id}">
+                                <strong>Claim ${report.claimIdx + 1}:</strong> ${report.claimText.substring(0, 100)}...<br>
+                                <small class="text-muted">Q: ${report.questionText}</small>
+                            </label>
+                        `;
+                        pdfSelectionList.appendChild(div);
+                    }
                 });
 
                 pdfDownloadSection.classList.remove('d-none');
@@ -967,33 +985,24 @@
                 } catch (error) {
                     alert(`Error downloading PDF: ${error.message}`);
                 } finally {
-                    toggleLoading(downloadPdfBtn, false, 'Download Selected Reports (PDF)');
+                    toggleLoading(downloadPdfBtn, false);
                 }
             }
 
             // Event Listeners
             inputMethodSelect.addEventListener('change', (event) => {
                 const method = inputMethodSelect.value;
-                
+
                 // Hide all input groups first
-                pasteInputGroup.classList.add('d-none');
-                urlInputGroup.classList.add('d-none');
-                imageInputGroup.classList.add('d-none');
-                videoInputGroup.classList.add('d-none');
-                videoUrlInputGroup.classList.add('d-none');
-                
+                [pasteInputGroup, urlInputGroup, imageInputGroup, videoInputGroup, videoUrlInputGroup]
+                    .forEach(el => el.classList.add('d-none'));
+
                 // Show selected input group
-                if (method === 'paste') {
-                    pasteInputGroup.classList.remove('d-none');
-                } else if (method === 'url') {
-                    urlInputGroup.classList.remove('d-none');
-                } else if (method === 'image') {
-                    imageInputGroup.classList.remove('d-none');
-                } else if (method === 'video') {
-                    videoInputGroup.classList.remove('d-none');
-                } else if (method === 'video-url') {
-                    videoUrlInputGroup.classList.remove('d-none');
-                }
+                const groupMap = {
+                    'paste': pasteInputGroup, 'url': urlInputGroup, 'image': imageInputGroup,
+                    'video': videoInputGroup, 'video-url': videoUrlInputGroup
+                };
+                if(groupMap[method]) groupMap[method].classList.remove('d-none');
             });
 
             // Setup drag and drop
@@ -1028,14 +1037,7 @@
 
                     const data = await response.json();
                     if (!response.ok) {
-                        if (response.status === 400) {
-                            alert('This functionality is only available for paid accounts. Please paste the text manually.');
-                        } else if (response.status === 404) {
-                            alert('Server endpoint not found. Please try again later or contact support (alizgravenil@gmail.com).');
-                        } else {
-                            alert(`Error: ${data.error || 'Failed to fetch article.'}`);
-                        }
-                        return;
+                       throw new Error(data.error || 'Failed to fetch article.');
                     }
 
                     if (!data.article_text || typeof data.article_text !== 'string') {
@@ -1050,9 +1052,9 @@
 
                 } catch (error) {
                     console.error('Fetch error:', error);
-                    alert('This functionality is only available for paid accounts. Please paste the text manually.');
+                    alert(`Error fetching article: ${error.message}`);
                 } finally {
-                    toggleLoading(fetchArticleBtn, false, 'Fetch Article');
+                    toggleLoading(fetchArticleBtn, false);
                 }
             });
 
@@ -1088,6 +1090,7 @@
 
                     if (data.claims.length === 0) {
                         resultsContainer.innerHTML = '<div class="alert alert-info mt-4">No explicit claims found in the provided text.</div>';
+                        toggleLoading(runAnalysisBtn, false); // Stop loading if no claims
                         return;
                     }
 
@@ -1095,6 +1098,7 @@
 
                 } catch (error) {
                     resultsContainer.innerHTML = `<div class="alert alert-danger mt-4">Error during analysis: ${error.message}</div>`;
+                    toggleLoading(runAnalysisBtn, false); // Stop loading on error
                 }
             });
 
@@ -1112,21 +1116,6 @@
                 if (targetBtn) {
                     const { claimIdx, questionIdx, reportContainerId } = targetBtn.dataset;
                     generateReport(parseInt(claimIdx), parseInt(questionIdx), reportContainerId, targetBtn);
-                    return;
-                }
-
-                const verifyBtn = e.target.closest('.verify-external-btn');
-                if (verifyBtn) {
-                    const { claimIdx, verdictContainerId, sourcesContainerId } = verifyBtn.dataset;
-                    verifyExternal(parseInt(claimIdx), verdictContainerId, sourcesContainerId, verifyBtn);
-                    return;
-                }
-
-                const modelDetailsBtn = e.target.closest('.get-model-details-btn');
-                if (modelDetailsBtn) {
-                    const { claimIdx, verdictContainerId, questionsContainerId } = modelDetailsBtn.dataset;
-                    await getModelDetails(parseInt(claimIdx), verdictContainerId, questionsContainerId, modelDetailsBtn);
-                    return;
                 }
             });
         });
