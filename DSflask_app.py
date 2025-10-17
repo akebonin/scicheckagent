@@ -101,7 +101,21 @@ BASE_EXTRACTION_RULES = '''
 - Output ONLY the claims formatted as a numbered list, or "No explicit claims found."
 '''
 
+BASE_JSON_STRUCTURE = '''
+Output a structured text response with the following format. Do NOT use code fences (```), JSON, or extra text outside this structure. Use exact labels and colons.
 
+Verdict: VERIFIED
+Justification: Concise explanation under 1000 characters.
+Sources: None
+Keywords: term1, term2, term3, term4, term5
+
+STRICT RULES:
+- Verdict: Exactly one of VERIFIED, PARTIALLY_SUPPORTED, INCONCLUSIVE, CONTRADICTED, SUPPORTED, NOT_SUPPORTED, FEASIBLE, POSSIBLE_BUT_UNPROVEN, UNLIKELY, NONSENSE
+- Justification: String, max 1000 characters
+- Sources: 0-2 valid URLs, comma-separated, or "None" if none
+- Keywords: 3-5 scientific/technical terms, comma-separated, each 3-20 characters
+- Output ONLY the structured text, nothing else
+'''
 
 # Prompt templates
 extraction_templates = {
