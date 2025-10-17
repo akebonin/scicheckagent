@@ -55,7 +55,7 @@ def store_analysis(session_id, article_data):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        INSERT OR REPLACE INTO analysis_sessions 
+        INSERT OR REPLACE INTO analysis_sessions
         (session_id, article_data, last_accessed)
         VALUES (?, ?, ?)
     ''', (session_id, json.dumps(article_data), datetime.now()))
@@ -66,7 +66,7 @@ def get_analysis(session_id):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        SELECT article_data FROM analysis_sessions 
+        SELECT article_data FROM analysis_sessions
         WHERE session_id = ? AND last_accessed > ?
     ''', (session_id, datetime.now() - timedelta(hours=24)))
     result = c.fetchone()
@@ -77,7 +77,7 @@ def update_access_time(session_id):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        UPDATE analysis_sessions SET last_accessed = ? 
+        UPDATE analysis_sessions SET last_accessed = ?
         WHERE session_id = ?
     ''', (datetime.now(), session_id))
     conn.commit()
@@ -526,32 +526,32 @@ def get_claim_details():
     try:
         claim_idx = request.json.get("claim_idx")
         current_article_id = session.get('current_article_id')
-        
+
         if not current_article_id:
             return jsonify({"error": "Analysis context missing. Please re-run analysis."}), 400
-        
+
         # Get data from database
         article_cache_data = get_analysis(current_article_id)
         if not article_cache_data:
             return jsonify({"error": "Analysis session expired or not found."}), 400
-        
+
         claims_data_in_cache = article_cache_data.get('claims_data', [])
-        
+
         if claim_idx is None or claim_idx >= len(claims_data_in_cache):
             return jsonify({"error": "Invalid claim index."}), 400
-        
+
         claim_item_in_cache = claims_data_in_cache[claim_idx]
         claim_text = claim_item_in_cache['text']
-        
+
         # Safely get the analysis mode with validation
         current_analysis_mode = article_cache_data.get('mode')
         logging.info(f"Current analysis mode: {current_analysis_mode}")
-        
+
         # Validate the analysis mode
         if not current_analysis_mode or current_analysis_mode not in verification_prompts:
             logging.warning(f"Invalid analysis mode: {current_analysis_mode}. Using default.")
             current_analysis_mode = 'General Analysis of Testable Claims'
-        
+
         # If already cached, return immediately
         if "model_verdict" in claim_item_in_cache and "questions" in claim_item_in_cache:
             return jsonify({
@@ -559,7 +559,7 @@ def get_claim_details():
                 "questions": claim_item_in_cache["questions"],
                 "search_keywords": claim_item_in_cache.get("search_keywords", [])
             })
-        
+
         # Generate verdict with retry loop
         verdict_prompt = verification_prompts[current_analysis_mode].format(claim=claim_text)
         model_verdict_content = "Could not generate model verdict."
@@ -567,35 +567,35 @@ def get_claim_details():
         search_keywords = []
         max_retries = 3
         retry_count = 0
-        
+
         while retry_count < max_retries:
             try:
                 logging.info(f"Calling OpenRouter for model verdict for claim {claim_idx}, attempt {retry_count + 1}...")
                 res = call_openrouter(verdict_prompt, json_mode=False, temperature=0.0)
                 raw_llm_response = res.json().get("choices", [{}])[0].get("message", {}).get("content", "")
                 logging.info(f"Raw LLM Response (full, attempt {retry_count + 1}): {repr(raw_llm_response)}")
-                
+
                 if not raw_llm_response.strip():
                     raise ValueError("Empty response from OpenRouter")
-                
+
                 # Parse text response with regex
                 verdict_match = re.search(r'Verdict:\s*(VERIFIED|PARTIALLY_SUPPORTED|INCONCLUSIVE|CONTRADICTED|SUPPORTED|NOT_SUPPORTED|FEASIBLE|POSSIBLE_BUT_UNPROVEN|UNLIKELY|NONSENSE)', raw_llm_response, re.IGNORECASE)
                 if not verdict_match:
                     logging.warning(f"Invalid verdict format in attempt {retry_count + 1}, retrying...")
                     retry_count += 1
                     continue
-                
+
                 verdict = verdict_match.group(1).upper()
-                
+
                 justification_match = re.search(r'Justification:\s*([\s\S]{20,1000}?(?=\n\s*(?:Sources|Keywords|$)))', raw_llm_response, re.IGNORECASE | re.DOTALL)
                 justification = justification_match.group(1).strip()[:1000] if justification_match else 'Justification could not be parsed from response.'
-                
+
                 sources_match = re.search(r'Sources:\s*([\s\S]*?)(?=\n\s*(?:Keywords|$))', raw_llm_response, re.IGNORECASE | re.DOTALL)
                 sources = []
                 if sources_match:
                     source_text = sources_match.group(1).strip()
                     sources = re.findall(r'(https?://[^\s,)]+)', source_text)[:2] or ['None']
-                
+
                 keywords_match = re.search(r'Keywords:\s*([\w\s,-]{10,})', raw_llm_response, re.IGNORECASE | re.DOTALL)
                 if keywords_match:
                     kw_text = keywords_match.group(1).strip()
@@ -603,14 +603,14 @@ def get_claim_details():
                 else:
                     words = re.findall(r'\b[a-zA-Z]{4,}\b', claim_text.lower())
                     search_keywords = list(set(words[:5])) or [claim_text.lower()[:50]]
-                
+
                 # Format for display
                 model_verdict_content = f"Verdict: **{verdict}**\n\nJustification: {justification}"
                 if sources and sources != ['None']:
                     model_verdict_content += f"\n\nSources:\n" + "\n".join(f"- {src}" for src in sources)
-                
+
                 break  # Successful parse, exit retry loop
-                
+
             except Exception as e:
                 logging.error(f"Failed to process LLM response in attempt {retry_count + 1}: {e}")
                 retry_count += 1
@@ -618,29 +618,29 @@ def get_claim_details():
                     model_verdict_content = f"Error generating verdict after {max_retries} attempts: {str(e)}"
                     words = re.findall(r'\b[a-zA-Z]{4,}\b', claim_text.lower())
                     search_keywords = list(set(words[:5])) or [claim_text.lower()[:50]]
-        
+
         # Generate questions
         try:
             questions = generate_questions_for_claim(claim_text)
         except Exception as e:
             logging.error(f"Failed to generate questions: {e}")
             questions = ["Could not generate research questions"]
-        
+
         # Store results in database
         claim_item_in_cache["model_verdict"] = model_verdict_content
         claim_item_in_cache["questions"] = questions
         claim_item_in_cache["search_keywords"] = search_keywords
-        
+
         # Update database
         store_analysis(current_article_id, article_cache_data)
         update_access_time(current_article_id)
-        
+
         return jsonify({
             "model_verdict": model_verdict_content,
             "questions": questions,
             "search_keywords": search_keywords
         })
-        
+
     except Exception as e:
         logging.error(f"Error in get_claim_details: {e}")
         return jsonify({"error": f"Internal server error: {str(e)}"}), 500
@@ -836,7 +836,7 @@ def debug_db():
     c.execute('SELECT session_id, article_data FROM analysis_sessions ORDER BY last_accessed DESC LIMIT 5')
     results = c.fetchall()
     conn.close()
-    
+
     debug_info = []
     for session_id, article_data in results:
         try:
@@ -849,83 +849,53 @@ def debug_db():
             })
         except:
             debug_info.append({'session_id': session_id, 'error': 'Failed to parse'})
-    
+
     return jsonify(debug_info)
 
 @app.route("/api/generate-report", methods=["POST"])
 def generate_report():
-    try:
-        data = request.json
-        claim_idx = data.get("claim_idx")
-        question_idx = data.get("question_idx")
-        
-        current_article_id = session.get('current_article_id')
-        if not current_article_id:
-            return Response(json.dumps({"error": "Analysis context missing. Please re-run analysis."}), mimetype='application/json', status=400)
-        
-        article_cache_data = get_analysis(current_article_id)
-        if not article_cache_data:
-            return Response(json.dumps({"error": "Analysis session expired or not found."}), mimetype='application/json', status=400)
-        
-        claims_data_in_cache = article_cache_data.get('claims_data', [])
-        if claim_idx is None or claim_idx >= len(claims_data_in_cache):
-            return Response(json.dumps({"error": "Invalid claim index."}), mimetype='application/json', status=400)
-        
-        claim_item_in_cache = claims_data_in_cache[claim_idx]
-        claim_text = claim_item_in_cache['text']
-        questions = claim_item_in_cache.get('questions', [])
-        if question_idx is None or question_idx >= len(questions):
-            return Response(json.dumps({"error": "Invalid question index."}), mimetype='application/json', status=400)
-        
-        question_text = questions[question_idx]
-        model_verdict_content = claim_item_in_cache.get('model_verdict', 'Verdict not yet generated by AI.')
-        external_verdict_content = claim_item_in_cache.get('external_verdict', 'Not yet externally verified.')
-        
-        report_key = f"q{question_idx}_report"
-        if report_key in claim_item_in_cache and claim_item_in_cache[report_key]:
-            def stream_cached_report():
-                yield f"data: {json.dumps({'content': claim_item_in_cache[report_key]})}\n\n"
-                yield f"data: [DONE]\n\n"
-            return Response(stream_cached_report(), mimetype='text/event-stream')
-        
-        prompt = f'''
-You are an AI researcher writing a short, evidence-based report (500-600 words). Your task is to investigate the research question in relation to the claim using verifiable scientific knowledge. Use the article context to ground your analysis where helpful. Clearly explain how the answer to the research question supports, contradicts, or contextualizes the claim. Provide concise reasoning and avoid speculation.
+    claim_idx = request.json.get("claim_idx")
+    question_idx = request.json.get("question_idx")
+    current_article_id = session.get('current_article_id')
+
+    if not current_article_id:
+        return Response(json.dumps({"error": "Analysis context missing. Please re-run analysis."}), mimetype='application/json', status=400)
+
+    article_cache_data = get_analysis(current_article_id)
+    if not article_cache_data:
+        return Response(json.dumps({"error": "Analysis session expired or not found."}), mimetype='application/json', status=400)
+
+    article_text = article_cache_data.get('text', '')
+    claims_data_in_cache = article_cache_data.get('claims_data', [])
+
+    if claim_idx is None or question_idx is None or claim_idx >= len(claims_data_in_cache) or 'questions' not in claims_data_in_cache[claim_idx] or question_idx >= len(claims_data_in_cache[claim_idx]['questions']):
+        return Response(json.dumps({"error": "Invalid indices or analysis data missing."}), mimetype='application/json', status=400)
+
+    claim_data_in_cache = claims_data_in_cache[claim_idx]
+    claim_text = claim_data_in_cache['text']
+    question_text = claim_data_in_cache['questions'][question_idx]
+    model_verdict_content = claim_data_in_cache.get('model_verdict', 'Verdict not yet generated by AI.')
+    external_verdict_content = claim_data_in_cache.get('external_verdict', 'Not yet externally verified.')
+
+    report_key = f"q{question_idx}_report"
+    if report_key in claim_data_in_cache and claim_data_in_cache[report_key]:
+        def stream_cached_report():
+            yield f"data: {json.dumps({'content': claim_data_in_cache[report_key]})}\n\n"
+            yield f"data: [DONE]\n\n"
+        return Response(stream_cached_report(), mimetype='text/event-stream')
+
+    prompt = f'''
+You are an AI researcher writing a short, evidence-based report (maximum 1000 words). Your task is to investigate the research question in relation to the claim using verifiable scientific knowledge. Use the article context to ground your analysis where helpful. Clearly explain how the answer to the research question supports, contradicts, or contextualizes the claim. Provide concise reasoning and avoid speculation.
 
 **Structure:**
 
 1. **Introduction:** Briefly state the question's relevance to the claim.
 
-2. **Analysis:** Summarize 2-3 relevant studies as a bulleted list (include study title, design, population, key findings, and relevance). Summarize mechanisms linking the claim to the question.
+2. **Analysis:** Answer the research question directly, citing evidence or established principles.
 
 3. **Conclusion:** Summarize how the analysis impacts the validity of the original claim.
 
 4. **Sources:** List up to 3 relevant sources with clickable full URLs. Prefer recent, peer-reviewed sources.
-
-**STRICT RULES:**
-- Output plain text, no code fences or JSON.
-- Use markdown for formatting (**bold**, *italic*, - for lists).
-- Use hyphens (-) instead of en-dashes or em-dashes.
-- Use standard spaces, not non-breaking spaces.
-- Sources must be valid URLs or "None" if unavailable.
-- If no studies are found, note this and provide a general answer.
-
-**Example:**
-1. **Introduction**
-**Claim**: Processed sugars suppress the immune system.
-**Question**: Does consumption of processed sugars impair innate immune responses in humans?
-This question is critical for dietary guidelines...
-
-2. **Analysis**
-- **High-Sugar Diet Impairs Neutrophil Function in Healthy Adults (Nutrients 2021)**: Randomized crossover, 30 participants. Neutrophil chemotaxis decreased by 22% (p<0.01). Relevant to innate immunity.
-- **Dietary Sugar Intake and Human Immune Function (Frontiers in Immunology 2022)**: Meta-analysis, 1200 participants. Reduced NK-cell cytotoxicity (OR=0.68). Confirms innate immune suppression.
-Mechanisms: High sugar intake causes hyperglycemia, leading to...
-
-3. **Conclusion**
-Consumption of processed sugars impairs innate immune responses...
-
-4. **Sources**
-1. https://www.mdpi.com/2072-6643/13/5/1234
-2. https://www.frontiersin.org/articles/10.3389/fimmu.2022.1234/full
 
 ---
 
@@ -953,38 +923,50 @@ Consumption of processed sugars impairs innate immune responses...
 
 **AI Research Report**
 '''
-        def stream_response():
-            full_report_content = ""
-            try:
-                logging.info(f"Calling OpenRouter for report generation, claim {claim_idx}, question {question_idx}...")
-                response = call_openrouter(prompt, stream=True)
-                response.raise_for_status()
-                for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
-                    if chunk:
-                        # Normalize Unicode characters
-                        chunk_str = unicodedata.normalize('NFKD', chunk).replace('\u2013', '-').replace('\u2014', '-').replace('\u00A0', ' ')
-                        if not chunk_str.strip():
-                            continue
-                        logging.info(f"Report stream chunk: {chunk_str[:200]}...")
-                        full_report_content += chunk_str
-                        yield f"data: {json.dumps({'content': chunk_str})}\n\n"
-                logging.info("Report stream complete")
-                yield f"data: [DONE]\n\n"
-                
-            except Exception as e:
-                logging.error(f"Error in report stream: {e}")
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
-            finally:
-                if full_report_content:
-                    claim_item_in_cache[report_key] = full_report_content
-                    store_analysis(current_article_id, article_cache_data)
-                    update_access_time(current_article_id)
-        
-        return Response(stream_response(), mimetype='text/event-stream')
-        
-    except Exception as e:
-        logging.error(f"Error in generate_report: {e}")
-        return Response(json.dumps({"error": f"Internal server error: {str(e)}"}), mimetype='application/json', status=500)
+
+    def stream_response():
+        full_report_content = ""
+        try:
+            logging.info(f"Calling OpenRouter for report generation for claim {claim_idx}, question {question_idx}...")
+            response = call_openrouter(prompt, stream=True)
+            response.raise_for_status()
+            for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
+                if chunk:
+                    lines = chunk.split('\n')
+                    for line in lines:
+                        if line.strip().startswith("data:"):
+                            data_part = line.strip()[len("data:"):].strip()
+                            if data_part == '[DONE]':
+                                continue
+                            try:
+                                json_data = json.loads(data_part)
+                                content = json_data['choices'][0]['delta'].get('content', '')
+                                if content:
+                                    full_report_content += content
+                                    yield f"data: {json.dumps({'content': content})}\n\n"
+                                if json_data['choices'][0].get('finish_reason') == 'stop':
+                                    break
+                            except json.JSONDecodeError:
+                                logging.debug(f"Skipping non-JSON data line: {line}")
+                                continue
+            # This check for 'stop' is another way to ensure we break the loop
+            # if 'finish_reason' was in the last chunk
+            if 'stop' in locals().get('json_data', {}).get('choices', [{}])[0].get('finish_reason', ''):
+                 pass
+
+        except Exception as e:
+            logging.error(f"Error during report streaming for claim {claim_idx}, question {question_idx}: {e}")
+            error_message = f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield error_message
+        finally:
+            if full_report_content:
+                claim_data_in_cache[report_key] = full_report_content
+                # Update the session data
+                store_analysis(current_article_id, article_cache_data)
+                update_access_time(current_article_id)
+            yield f"data: [DONE]\n\n"
+
+    return Response(stream_response(), mimetype='text/event-stream')
 
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
