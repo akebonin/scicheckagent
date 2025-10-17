@@ -530,7 +530,157 @@ def analyze():
         logging.error(f"Failed to extract claims: {e}")
         return jsonify({"error": f"Failed to extract claims: {str(e)}"}), 500
 
-
+@app.route("/api/get-claim-details", methods=["POST"])
+def get_claim_details():
+    try:
+        claim_idx = request.json.get("claim_idx")
+        current_article_id = session.get('current_article_id')
+        
+        if not current_article_id:
+            return jsonify({"error": "Analysis context missing. Please re-run analysis."}), 400
+        
+        # Get data from database
+        article_cache_data = get_analysis(current_article_id)
+        if not article_cache_data:
+            return jsonify({"error": "Analysis session expired or not found."}), 400
+        
+        claims_data_in_cache = article_cache_data.get('claims_data', [])
+        
+        if claim_idx is None or claim_idx >= len(claims_data_in_cache):
+            return jsonify({"error": "Invalid claim index."}), 400
+        
+        claim_item_in_cache = claims_data_in_cache[claim_idx]
+        claim_text = claim_item_in_cache['text']
+        
+        # Safely get the analysis mode with validation
+        current_analysis_mode = article_cache_data.get('mode')
+        logging.info(f"Current analysis mode: {current_analysis_mode}")
+        
+        # Validate the analysis mode
+        if not current_analysis_mode or current_analysis_mode not in verification_prompts:
+            logging.warning(f"Invalid analysis mode: {current_analysis_mode}. Using default.")
+            current_analysis_mode = 'General Analysis of Testable Claims'
+        
+        # If already cached, return immediately
+        if "model_verdict" in claim_item_in_cache and "questions" in claim_item_in_cache:
+            return jsonify({
+                "model_verdict": claim_item_in_cache["model_verdict"],
+                "questions": claim_item_in_cache["questions"],
+                "search_keywords": claim_item_in_cache.get("search_keywords", [])
+            })
+        
+        # Generate verdict with proper error handling
+        verdict_prompt = verification_prompts[current_analysis_mode].format(claim=claim_text)
+        model_verdict_content = "Could not generate model verdict."
+        questions = []
+        search_keywords = []
+        
+        try:
+            logging.info(f"Calling OpenRouter for model verdict for claim {claim_idx}...")
+            res = call_openrouter(verdict_prompt, json_mode=True)
+            raw_llm_response = res.json()["choices"][0]["message"]["content"]
+            logging.info(f"Raw LLM Response: {repr(raw_llm_response)}")  # Log exact output
+            
+            # Robust JSON parsing with aggressive cleaning
+            try:
+                # Strip code fences, leading/trailing text, and extra whitespace
+                cleaned_response = re.sub(r'^```(?:json)?\n|\n```$', '', raw_llm_response.strip())
+                cleaned_response = re.sub(r'^\s*[\w\s]*\n\s*\{|\}\s*[\w\s]*$', '', cleaned_response)  # Remove non-JSON text
+                json_match = re.search(r'\{[\s\S]*\}', cleaned_response)
+                if json_match:
+                    json_str = json_match.group()
+                    # Fix common JSON issues
+                    json_str_fixed = re.sub(r'(\n\s*)("?\w+"?)\s*:', r'\1"\2":', json_str)  # Quote keys
+                    json_str_fixed = re.sub(r',\s*}', r'}', json_str_fixed)  # Remove trailing commas
+                    json_str_fixed = re.sub(r',\s*,', r',', json_str_fixed)  # Fix double commas
+                    json_str_fixed = re.sub(r'(\[\s*),', r'\1', json_str_fixed)  # Remove comma after [
+                    json_str_fixed = re.sub(r'"\s*,', r'",', json_str_fixed)  # Fix spaces before commas
+                    parsed_data = json.loads(json_str_fixed)
+                    
+                    verdict = parsed_data.get('verdict', 'INCONCLUSIVE').upper()
+                    # Validate verdict
+                    valid_verdicts = ['VERIFIED', 'PARTIALLY_SUPPORTED', 'INCONCLUSIVE', 'CONTRADICTED', 
+                                    'SUPPORTED', 'NOT_SUPPORTED', 'FEASIBLE', 'POSSIBLE_BUT_UNPROVEN', 
+                                    'UNLIKELY', 'NONSENSE']
+                    if verdict not in valid_verdicts:
+                        verdict = 'INCONCLUSIVE'
+                    justification = parsed_data.get('justification', 'No justification provided.')[:1000]
+                    sources = parsed_data.get('sources', [])[:2]
+                    search_keywords = parsed_data.get('keywords', [])[:5]
+                    
+                    # Format for display
+                    model_verdict_content = f"Verdict: **{verdict}**\n\nJustification: {justification}"
+                    if sources:
+                        model_verdict_content += f"\n\nSources:\n" + "\n".join(f"- {src}" for src in sources)
+                    
+                    # Fallback for empty keywords
+                    if not search_keywords:
+                        words = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text.lower())
+                        search_keywords = list(set(words[:5])) or [claim_text.lower()][:100]
+                else:
+                    raise json.JSONDecodeError("No JSON block found", "", 0)
+                    
+            except json.JSONDecodeError as e:
+                logging.warning(f"JSON parsing failed, falling back to regex extraction: {e}")
+                # Regex fallback: Extract verdict, justification, sources, keywords
+                verdict_match = re.search(r'(VERIFIED|PARTIALLY_SUPPORTED|INCONCLUSIVE|CONTRADICTED|SUPPORTED|NOT_SUPPORTED|FEASIBLE|POSSIBLE_BUT_UNPROVEN|UNLIKELY|NONSENSE)', raw_llm_response, re.IGNORECASE)
+                verdict = verdict_match.group(1).upper() if verdict_match else 'INCONCLUSIVE'
+                
+                # Extract justification
+                justification_match = re.search(r'(?:justification|explanation)[:\s]*([\s\S]{50,1000}?(?=\n\s*(?:keywords|sources|$)))', raw_llm_response, re.IGNORECASE | re.DOTALL)
+                justification = justification_match.group(1).strip()[:1000] if justification_match else 'Justification could not be parsed from response.'
+                
+                # Extract sources
+                sources = re.findall(r'(https?://[^\s,)]+)', raw_llm_response)[:2]
+                
+                # Extract keywords (more permissive)
+                keywords_match = re.search(r'(?:keywords?[:\s,]*)([\w\s,-]{10,})', raw_llm_response, re.IGNORECASE | re.DOTALL)
+                if keywords_match:
+                    kw_text = keywords_match.group(1).strip()
+                    search_keywords = [kw.strip().lower() for kw in re.split(r'[,;\s]+', kw_text) if len(kw.strip()) > 3][:5]
+                else:
+                    words = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text.lower())
+                    search_keywords = list(set(words[:5])) or [claim_text.lower()][:100]
+                
+                model_verdict_content = f"Verdict: **{verdict}**\n\nJustification: {justification}"
+                if sources:
+                    model_verdict_content += f"\n\nSources:\n" + "\n".join(f"- {src}" for src in sources)
+                
+            except Exception as parse_e:
+                logging.error(f"Unexpected parsing error: {parse_e}")
+                model_verdict_content = f"Error parsing response: {raw_llm_response[:1000]}"
+                search_keywords = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text.lower())[:5] or [claim_text.lower()][:100]
+        
+        except Exception as e:
+            logging.error(f"Failed to process LLM response: {e}")
+            model_verdict_content = f"Error generating verdict: {str(e)}"
+            search_keywords = re.findall(r'\b[a-zA-Z]{5,}\b', claim_text.lower())[:5] or [claim_text.lower()][:100]
+        
+        # Generate questions
+        try:
+            questions = generate_questions_for_claim(claim_text)
+        except Exception as e:
+            logging.error(f"Failed to generate questions: {e}")
+            questions = ["Could not generate research questions"]
+        
+        # Store results in database
+        claim_item_in_cache["model_verdict"] = model_verdict_content
+        claim_item_in_cache["questions"] = questions
+        claim_item_in_cache["search_keywords"] = search_keywords
+        
+        # Update database
+        store_analysis(current_article_id, article_cache_data)
+        update_access_time(current_article_id)
+        
+        return jsonify({
+            "model_verdict": model_verdict_content,
+            "questions": questions,
+            "search_keywords": search_keywords
+        })
+        
+    except Exception as e:
+        logging.error(f"Error in get_claim_details: {e}")
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
 
 @app.route("/api/verify-external", methods=["POST"])
 def verify_external():
