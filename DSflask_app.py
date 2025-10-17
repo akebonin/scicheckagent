@@ -152,31 +152,22 @@ OUTPUT:
 
 verification_prompts = {
     "General Analysis of Testable Claims": f'''
-Analyze this claim and provide a JSON response:
-{BASE_JSON_STRUCTURE}
+    Analyze this claim and return a structured text response. {BASE_JSON_STRUCTURE}
 
-Claim: "{{claim}}"
-
-JSON Response:
-''',
+    Claim: "{{claim}}"
+    ''',
 
     "Specific Focus on Scientific Claims": f'''
-Analyze this scientific claim and provide a JSON response:
-{BASE_JSON_STRUCTURE}
+    Analyze this scientific claim and return a structured text response. {BASE_JSON_STRUCTURE}
 
-Claim: "{{claim}}"
-
-JSON Response:
-''',
+    Claim: "{{claim}}"
+    ''',
 
     "Technology-Focused Extraction": f'''
-Evaluate this technology claim and provide a JSON response:
-{BASE_JSON_STRUCTURE}
+    Evaluate this technology claim and return a structured text response. {BASE_JSON_STRUCTURE}
 
-Claim: "{{claim}}"
-
-JSON Response:
-'''
+    Claim: "{{claim}}"
+    '''
 }
 
 # Helper functions
