@@ -22,6 +22,9 @@ from datetime import datetime, timedelta
 import base64
 from PIL import Image
 import pytesseract
+from openai import OpenAI
+from moviepy.editor import VideoFileClip
+import yt_dlp
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -89,6 +92,11 @@ init_db()
 # API Configuration
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    logging.error("OPENAI_API_KEY not set. Video transcription will fail.")
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Base prompt templates for consolidation
 BASE_EXTRACTION_RULES = '''
@@ -385,12 +393,69 @@ def analyze_image_with_ocr(image_path):
         return ""
 
 def transcribe_video(video_path):
-    """Transcribe video using TurboScribe API or similar service"""
-    # This is a placeholder - you'll need to implement actual video transcription
-    # For now, we'll return a message about the feature
-    logging.info(f"Video transcription called for: {video_path}")
-    return "Video transcription feature requires TurboScribe API integration. Please paste the text manually for now."
+    """Transcribe video using OpenAI Whisper API."""
+    try:
+        # Extract audio from video
+        audio_path = video_path + ".mp3"
+        video_clip = VideoFileClip(video_path)
+        video_clip.audio.write_audiofile(audio_path)
+        video_clip.close()
 
+        # Transcribe audio using Whisper
+        with open(audio_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",  # Use 'whisper-1' for best results; it's multilingual
+                file=audio_file,
+                response_format="text"  # Can change to 'verbose_json' for timestamps
+            )
+
+        # Clean up audio file
+        os.remove(audio_path)
+
+        logging.info(f"Video transcribed successfully: {video_path}")
+        return transcript
+
+    except Exception as e:
+        logging.error(f"Video transcription failed: {e}")
+        raise ValueError(f"Failed to transcribe video: {str(e)}")
+
+def transcribe_video_url(video_url):
+    """Download and transcribe video from URL using yt-dlp and Whisper."""
+    try:
+        # Download audio using yt-dlp (supports YouTube, Vimeo, etc.)
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': '/tmp/%(id)s.%(ext)s',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'quiet': True  # Suppress console output
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            audio_path = ydl.prepare_filename(info).rsplit('.', 1)[0] + '.mp3'  # Get MP3 path
+
+        # Transcribe audio using Whisper
+        with open(audio_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                response_format="text"
+            )
+
+        # Clean up audio file
+        os.remove(audio_path)
+
+        logging.info(f"Video URL transcribed successfully: {video_url}")
+        return transcript
+
+    except Exception as e:
+        logging.error(f"Video URL transcription failed: {e}")
+        raise ValueError(f"Failed to transcribe video URL: {str(e)}")        
+        
 def save_uploaded_file(file, upload_folder="/home/scicheckagent/mysite/uploads"):
     """Save uploaded file and return path"""
     try:
@@ -777,7 +842,7 @@ def process_image():
 
 @app.route("/api/process-video", methods=["POST"])
 def process_video():
-    """Process uploaded video and extract transcription"""
+    """Process uploaded video and extract transcription using Whisper."""
     try:
         if 'video' not in request.files:
             return jsonify({"error": "No video file provided"}), 400
@@ -791,7 +856,7 @@ def process_video():
         if not video_path:
             return jsonify({"error": "Failed to save video"}), 500
 
-        # Transcribe video (placeholder implementation)
+        # Transcribe video
         transcription = transcribe_video(video_path)
 
         # Clean up the uploaded file
@@ -800,15 +865,17 @@ def process_video():
         except:
             pass
 
-        return jsonify({"transcription": transcription, "note": "Video transcription requires TurboScribe API integration. Please paste the text manually for now."})
+        return jsonify({"transcription": transcription})
 
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
     except Exception as e:
         logging.error(f"Error in process_video endpoint: {e}")
         return jsonify({"error": f"Failed to process video: {str(e)}"}), 500
 
 @app.route("/api/transcribe-video-url", methods=["POST"])
 def transcribe_video_url():
-    """Transcribe video from URL using TurboScribe API"""
+    """Transcribe video from URL using Whisper."""
     try:
         data = request.json
         video_url = data.get("video_url")
@@ -816,15 +883,12 @@ def transcribe_video_url():
         if not video_url:
             return jsonify({"error": "No video URL provided"}), 400
 
-        # Placeholder for TurboScribe API integration
-        # You would need to implement actual API call to TurboScribe
-        logging.info(f"Video URL transcription requested for: {video_url}")
+        transcription = transcribe_video_url(video_url)
 
-        return jsonify({
-            "transcription": "Video URL transcription requires TurboScribe API integration. Please paste the text manually for now.",
-            "note": "This feature requires TurboScribe API key and proper integration."
-        })
+        return jsonify({"transcription": transcription})
 
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
     except Exception as e:
         logging.error(f"Error in transcribe_video_url endpoint: {e}")
         return jsonify({"error": f"Failed to transcribe video URL: {str(e)}"}), 500
