@@ -101,23 +101,7 @@ BASE_EXTRACTION_RULES = '''
 - Output ONLY the claims formatted as a numbered list, or "No explicit claims found."
 '''
 
-BASE_JSON_STRUCTURE = '''
-Output exactly one valid JSON object with this structure. Do not include any additional text, code fences, or whitespace before or after the JSON.
 
-{
-    "verdict": "VERIFIED|PARTIALLY_SUPPORTED|INCONCLUSIVE|CONTRADICTED|SUPPORTED|NOT_SUPPORTED|FEASIBLE|POSSIBLE_BUT_UNPROVEN|UNLIKELY|NONSENSE",
-    "justification": "Concise explanation under 1000 characters...",
-    "sources": ["url1", "url2"] or [],
-    "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"]
-}
-
-STRICT RULES:
-- Verdict MUST match one of the specified options for this analysis mode
-- Justification max 1000 characters
-- Sources: 1-2 relevant URLs or empty array
-- Keywords: 3-5 relevant scientific/technical search terms
-- Output ONLY valid JSON, no additional text
-'''
 
 # Prompt templates
 extraction_templates = {
