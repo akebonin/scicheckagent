@@ -419,7 +419,7 @@ def transcribe_video(video_path):
         logging.error(f"Video transcription failed: {e}")
         raise ValueError(f"Failed to transcribe video: {str(e)}")
 
-def transcribe_video_url(video_url):
+def transcribe_from_url(video_url):
     """Download and transcribe video from URL using yt-dlp and Whisper."""
     try:
         # Download audio using yt-dlp (supports YouTube, Vimeo, etc.)
@@ -454,8 +454,8 @@ def transcribe_video_url(video_url):
 
     except Exception as e:
         logging.error(f"Video URL transcription failed: {e}")
-        raise ValueError(f"Failed to transcribe video URL: {str(e)}")        
-        
+        raise ValueError(f"Failed to transcribe video URL: {str(e)}")
+
 def save_uploaded_file(file, upload_folder="/home/scicheckagent/mysite/uploads"):
     """Save uploaded file and return path"""
     try:
@@ -883,7 +883,7 @@ def transcribe_video_url():
         if not video_url:
             return jsonify({"error": "No video URL provided"}), 400
 
-        transcription = transcribe_video_url(video_url)
+        transcription = transcribe_from_url(video_url)
 
         return jsonify({"transcription": transcription})
 
