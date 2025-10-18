@@ -1051,76 +1051,68 @@
     }
 
             function updatePdfSelectionList() {
-    console.log('updatePdfSelectionList called'); // DEBUG
     pdfSelectionList.innerHTML = '';
-    
-    // First, let's scan ALL possible report containers, not just the ones in generatedReports
-    let foundReports = [];
-    const allReportContainers = document.querySelectorAll('[id^="report-claim-"]');
-    
-    console.log('Found report containers:', allReportContainers.length); // DEBUG
-    
-    allReportContainers.forEach(container => {
-        const reportBox = container.querySelector('.report-box');
-        if (reportBox) {
-            const textContent = reportBox.textContent || '';
-            const hasSubstantialContent = textContent.trim().length > 100 && 
-                                        !textContent.includes('Generating report') &&
-                                        !textContent.includes('Loading...') &&
-                                        !textContent.includes('Error:');
-            
-            console.log('Report container:', container.id, 'Content length:', textContent.length, 'Substantial:', hasSubstantialContent); // DEBUG
-            
-            if (hasSubstantialContent) {
-                // Extract claimIdx and questionIdx from the ID
-                const idParts = container.id.split('-');
-                const claimIdx = parseInt(idParts[2]);
-                const questionIdx = parseInt(idParts[4]);
-                
-                // Get claim text
-                const claimElement = document.querySelector(`#claim-${claimIdx} .claim-text`);
-                const claimText = claimElement ? claimElement.textContent : `Claim ${claimIdx + 1}`;
-                
-                // Get question text
-                const questionElement = document.querySelector(`#questions-list-claim-${claimIdx} li:nth-child(${questionIdx + 1}) span`);
-                const questionText = questionElement ? questionElement.textContent.replace(`Q${questionIdx + 1}:`, '').trim() : `Question ${questionIdx + 1}`;
-                
-                foundReports.push({
-                    id: container.id.replace('report-', ''),
-                    claimIdx: claimIdx,
-                    questionIdx: questionIdx,
-                    claimText: claimText,
-                    questionText: questionText
-                });
-            }
+
+    // Collect all model verdicts and external verifications
+    const allClaims = document.querySelectorAll('.claim-card');
+    let foundItems = [];
+
+    allClaims.forEach((claim, i) => {
+        const claimText = claim.querySelector('.claim-text')?.textContent?.trim() || `Claim ${i + 1}`;
+        const modelVerdict = claim.querySelector(`#model-verdict-claim-${i}`)?.textContent?.trim() || '';
+        const externalVerdict = claim.querySelector(`#external-verdict-claim-${i}`)?.textContent?.trim() || '';
+        const hasModel = modelVerdict && !modelVerdict.includes('Loading');
+        const hasExternal = externalVerdict && !externalVerdict.includes('Loading');
+
+        if (hasModel || hasExternal) {
+            foundItems.push({
+                id: `claim-${i}-summary`,
+                claimIdx: i,
+                claimText,
+                questionText: 'Model verdict + external verification'
+            });
         }
     });
-    
-    console.log('Found substantial reports:', foundReports.length); // DEBUG
-    
-    if (foundReports.length === 0) {
-        pdfSelectionList.innerHTML = '<p class="text-muted">No complete reports available for export. Generate reports by clicking "Generate Report" buttons.</p>';
-        pdfDownloadSection.classList.add('d-none');
-        return;
-    }
-    
-    // Build the selection UI
-    foundReports.forEach(report => {
-        const div = document.createElement('div');
-        div.className = 'form-check mb-2';
-        div.innerHTML = `
-            <input class="form-check-input report-selection" type="checkbox"
-                id="pdf-${report.id}" value="${report.id}" checked>
-            <label class="form-check-label" for="pdf-${report.id}">
-                <strong>Claim ${report.claimIdx + 1}:</strong> ${report.claimText.substring(0, 80)}${report.claimText.length > 80 ? '...' : ''}<br>
-                <small class="text-muted">Q: ${report.questionText.substring(0, 60)}${report.questionText.length > 60 ? '...' : ''}</small>
-            </label>
-        `;
-        pdfSelectionList.appendChild(div);
+
+    // Collect generated reports as before
+    const allReportContainers = document.querySelectorAll('[id^="report-claim-"]');
+    allReportContainers.forEach(container => {
+        const reportBox = container.querySelector('.report-box');
+        if (reportBox && reportBox.textContent.trim().length > 50) {
+            const idParts = container.id.split('-');
+            const claimIdx = parseInt(idParts[2]);
+            const questionIdx = parseInt(idParts[4]);
+            const claimText = document.querySelector(`#claim-${claimIdx} .claim-text`)?.textContent || `Claim ${claimIdx + 1}`;
+            const questionText = document.querySelector(`#questions-list-claim-${claimIdx} li:nth-child(${questionIdx + 1}) span`)?.textContent?.replace(/Q\d+:/, '').trim() || `Question ${questionIdx + 1}`;
+            foundItems.push({
+                id: container.id.replace('report-', ''),
+                claimIdx,
+                questionIdx,
+                claimText,
+                questionText
+            });
+        }
     });
-    
+
+    if (foundItems.length === 0) {
+        pdfSelectionList.innerHTML = '<p class="text-muted">No analysis content available yet. Run analysis first.</p>';
+    } else {
+        foundItems.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'form-check mb-2';
+            div.innerHTML = `
+                <input class="form-check-input report-selection" type="checkbox" id="pdf-${item.id}" value="${item.id}" checked>
+                <label class="form-check-label" for="pdf-${item.id}">
+                    <strong>Claim ${item.claimIdx + 1}:</strong> ${item.claimText.substring(0, 80)}${item.claimText.length > 80 ? '...' : ''}<br>
+                    <small class="text-muted">${item.questionText}</small>
+                </label>
+            `;
+            pdfSelectionList.appendChild(div);
+        });
+    }
+
+    // Always show the section
     pdfDownloadSection.classList.remove('d-none');
-    console.log('PDF section should now be visible'); // DEBUG
         }
 
             async function downloadSelectedPdf() {
