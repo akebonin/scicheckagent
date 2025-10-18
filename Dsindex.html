@@ -959,98 +959,131 @@
                 }
             }
 
-            async function generateReport(claimIdx, questionIdx, reportContainerId, button) {
+            // ---------------------- generateReport (REPLACE) ----------------------
+async function generateReport(claimIdx, questionIdx, reportContainerId, button) {
     const reportContainer = document.getElementById(reportContainerId);
     reportContainer.innerHTML = '<div class="report-box text-center"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div> Generating report...</div>';
-    
+
     if (button) {
         button.disabled = true;
-        button.innerHTML = 'Generating...'; // Visual feedback
+        button.innerHTML = 'Generating...';
     }
-    
+
     try {
         const response = await fetch('/api/generate-report', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ claim_idx: claimIdx, question_idx: questionIdx })
         });
-        
+
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || `Failed to start report generation: ${response.status}`);
+            // try to extract json error, fallback to text
+            let errText;
+            try { errText = await response.json(); errText = errText.error || JSON.stringify(errText); } catch(e){ errText = await response.text(); }
+            throw new Error(errText || `Failed to start report generation: ${response.status}`);
         }
-        
+
+        // prepare streaming read
         reportContainer.innerHTML = '<div class="report-box"></div>';
         const reportBox = reportContainer.querySelector('.report-box');
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
-        
         let fullContent = '';
-        
+        let sawAnyChunk = false;
+
         while (true) {
             const { value, done } = await reader.read();
             if (done) break;
-            
+            sawAnyChunk = true;
+
             const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split('\n\n');
-            
-            for (const line of lines) {
+            // the stream might not be strict SSE; handle gracefully
+            // accept both "data: {...}\n\n" and raw JSON chunks
+            const parts = chunk.split(/\n\n/);
+            for (const part of parts) {
+                const line = part.trim();
+                if (!line) continue;
+
+                // SSE-style "data: ..." lines
                 if (line.startsWith('data: ')) {
                     const dataPart = line.substring(6).trim();
                     if (dataPart === '[DONE]') {
-                        // Final update when streaming is complete
+                        // server signalled done
                         reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
-                        
-                        // Ensure the report is tracked in our array
-                        const reportId = `claim-${claimIdx}-question-${questionIdx}`;
-                        if (!generatedReports.find(r => r.id === reportId)) {
-                            const claimElement = document.querySelector(`#claim-${claimIdx} .claim-text`);
-                            const questionElement = document.querySelector(`#questions-list-claim-${claimIdx} li:nth-child(${questionIdx + 1}) span`);
-                            
-                            generatedReports.push({
-                                id: reportId,
-                                claimIdx: claimIdx,
-                                questionIdx: questionIdx,
-                                claimText: claimElement ? claimElement.textContent : `Claim ${claimIdx + 1}`,
-                                questionText: questionElement ? questionElement.textContent.replace(`Q${questionIdx + 1}:`, '').trim() : `Question ${questionIdx + 1}`
-                            });
-                        }
-                        
-                        // Update PDF selection with a small delay to ensure DOM is updated
-                        setTimeout(updatePdfSelectionList, 500);
                         break;
                     }
-                    
                     try {
                         const jsonData = JSON.parse(dataPart);
                         if (jsonData.content) {
                             fullContent += jsonData.content;
                             reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
                         }
-                        
                         if (jsonData.error) {
                             reportBox.innerHTML += `<br><strong class="text-danger">Error: ${escapeHTML(jsonData.error)}</strong>`;
-                            return;
                         }
                     } catch (e) {
-                        console.warn("Error parsing SSE chunk:", e, "Chunk:", dataPart);
+                        // not JSON — append raw text
+                        fullContent += dataPart;
+                        reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
+                    }
+                } else {
+                    // Non-SSE chunk — try parse JSON or append raw
+                    try {
+                        const jsonData = JSON.parse(line);
+                        if (jsonData.content) {
+                            fullContent += jsonData.content;
+                            reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
+                        }
+                        if (jsonData.error) {
+                            reportBox.innerHTML += `<br><strong class="text-danger">Error: ${escapeHTML(jsonData.error)}</strong>`;
+                        }
+                    } catch (e) {
+                        // raw text chunk
+                        fullContent += line;
+                        reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
                     }
                 }
             }
         }
-        
+
+        // FINALIZE: If we received any content, ensure report is tracked and UI updated
+        if (fullContent && fullContent.trim().length > 0) {
+            reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
+
+            // track generatedReports (prevent duplicates)
+            const reportId = `claim-${claimIdx}-question-${questionIdx}`;
+            if (!generatedReports.find(r => r.id === reportId)) {
+                const claimElement = document.querySelector(`#claim-${claimIdx} .claim-text`);
+                const questionElement = document.querySelector(`#questions-list-claim-${claimIdx} li:nth-child(${questionIdx + 1}) span`);
+                generatedReports.push({
+                    id: reportId,
+                    claimIdx: claimIdx,
+                    questionIdx: questionIdx,
+                    claimText: claimElement ? claimElement.textContent : `Claim ${claimIdx + 1}`,
+                    questionText: questionElement ? questionElement.textContent.replace(`Q${questionIdx + 1}:`, '').trim() : `Question ${questionIdx + 1}`
+                });
+            }
+
+            // small delay to allow DOM to settle, then update PDF selection UI
+            setTimeout(updatePdfSelectionList, 200);
+        } else {
+            // no content - show a warning
+            reportBox.innerHTML = '<div class="alert alert-warning p-2">No report content returned.</div>';
+        }
     } catch (error) {
         console.error('Report generation error:', error);
-        reportContainer.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+        reportContainer.innerHTML = `<div class="alert alert-danger">${escapeHTML(error.message)}</div>`;
     } finally {
         if (button) {
             button.disabled = false;
             button.innerHTML = 'Generate Report';
         }
     }
-    }
+}
+// ---------------------- end generateReport ----------------------
 
-           function updatePdfSelectionList() {
+           // ---------------------- updatePdfSelectionList (REPLACE) ----------------------
+function updatePdfSelectionList() {
     const previouslyChecked = new Set(
         Array.from(document.querySelectorAll('.report-selection:checked')).map(c => c.value)
     );
@@ -1058,19 +1091,24 @@
     pdfSelectionList.innerHTML = '';
     const foundItems = [];
 
-    // 1️⃣ Include model verdict + external verification summaries
+    // 1) Add model-verdict + external-verification summaries per claim
     const allClaims = document.querySelectorAll('.claim-card');
-    allClaims.forEach((claim, i) => {
-        const claimText = claim.querySelector('.claim-text')?.textContent?.trim() || `Claim ${i + 1}`;
-        const modelVerdict = claim.querySelector(`#model-verdict-claim-${i}`)?.textContent?.trim() || '';
-        const externalVerdict = claim.querySelector(`#external-verdict-claim-${i}`)?.textContent?.trim() || '';
-        const hasModel = modelVerdict && !modelVerdict.includes('Loading');
-        const hasExternal = externalVerdict && !externalVerdict.includes('Loading');
+    allClaims.forEach((claim, idx) => {
+        // claim-card id is "claim-<i>"
+        const claimIdx = idx;
+        const claimText = claim.querySelector('.claim-text')?.textContent?.trim() || `Claim ${claimIdx + 1}`;
+        const modelVerdictEl = claim.querySelector(`#model-verdict-claim-${claimIdx}`) || claim.querySelector(`#model-verdict-claim-${claimIdx}`);
+        const externalVerdictEl = claim.querySelector(`#external-verdict-claim-${claimIdx}`) || claim.querySelector(`#external-verdict-claim-${claimIdx}`);
+        const modelVerdict = modelVerdictEl ? modelVerdictEl.textContent.trim() : '';
+        const externalVerdict = externalVerdictEl ? externalVerdictEl.textContent.trim() : '';
+
+        const hasModel = modelVerdict && !modelVerdict.toLowerCase().includes('loading');
+        const hasExternal = externalVerdict && !externalVerdict.toLowerCase().includes('loading') && !externalVerdict.toLowerCase().includes('toggled off');
 
         if (hasModel || hasExternal) {
             foundItems.push({
-                id: `claim-${i}-summary`,
-                claimIdx: i,
+                id: `claim-${claimIdx}-summary`,
+                claimIdx,
                 questionIdx: null,
                 claimText,
                 questionText: 'Model verdict + external verification'
@@ -1078,19 +1116,32 @@
         }
     });
 
-    // 2️⃣ Include generated reports (streamed or completed)
+    // 2) Add any generatedReports tracked in memory (safe single source)
+    generatedReports.forEach(r => {
+        if (!foundItems.find(f => f.id === r.id)) {
+            foundItems.push({
+                id: r.id,
+                claimIdx: r.claimIdx,
+                questionIdx: r.questionIdx,
+                claimText: r.claimText,
+                questionText: r.questionText
+            });
+        }
+    });
+
+    // 3) Also scan DOM for any report-claim-* containers that have content (covers streamed DOM-only cases)
     const allReportContainers = document.querySelectorAll('[id^="report-claim-"]');
     allReportContainers.forEach(container => {
         const reportBox = container.querySelector('.report-box');
         if (reportBox && reportBox.textContent.trim().length > 50) {
-            const idParts = container.id.split('-');
+            const idParts = container.id.split('-'); // e.g. ["report","claim","0","question","1"]
+            // safe parsing
             const claimIdx = parseInt(idParts[2]);
             const questionIdx = parseInt(idParts[4]);
-            const claimText = document.querySelector(`#claim-${claimIdx} .claim-text`)?.textContent || `Claim ${claimIdx + 1}`;
-            const questionText = document.querySelector(`#questions-list-claim-${claimIdx} li:nth-child(${questionIdx + 1}) span`)?.textContent?.replace(/Q\d+:/, '').trim() || `Question ${questionIdx + 1}`;
-
             const id = container.id.replace('report-', '');
             if (!foundItems.find(f => f.id === id)) {
+                const claimText = document.querySelector(`#claim-${claimIdx} .claim-text`)?.textContent || `Claim ${claimIdx + 1}`;
+                const questionText = document.querySelector(`#questions-list-claim-${claimIdx} li:nth-child(${questionIdx + 1}) span`)?.textContent?.replace(/Q\d+:/, '').trim() || `Question ${questionIdx + 1}`;
                 foundItems.push({
                     id,
                     claimIdx,
@@ -1102,7 +1153,7 @@
         }
     });
 
-    // 3️⃣ Render UI checkboxes
+    // 4) Render the selection UI and preserve previous checks
     if (foundItems.length === 0) {
         pdfSelectionList.innerHTML = '<p class="text-muted">No analysis data yet. Run analysis first.</p>';
     } else {
@@ -1122,49 +1173,85 @@
         });
     }
 
-    // 4️⃣ Always show section
+    // Always show section
     pdfDownloadSection.classList.remove('d-none');
-} 
+}
+// ---------------------- end updatePdfSelectionList ----------------------
 
-            async function downloadSelectedPdf() {
-                const selectedReports = Array.from(document.querySelectorAll('.report-selection:checked'))
-                    .map(checkbox => checkbox.value);
-                
-                if (selectedReports.length === 0) {
-                    alert('Please select at least one report to download.');
-                    return;
-                }
-                
-                toggleLoading(downloadPdfBtn, true, 'Generating PDF...');
-                
-                try {
-                    const response = await fetch('/export-pdf', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ selected_reports: selectedReports })
-                    });
-                    
-                    if (!response.ok) {
-                        const errorText = await response.text();
-                        throw new Error(errorText || `PDF generation failed: ${response.status}`);
-                    }
-                    
-                    // Create download link
-                    const blob = await response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'SciCheck_AI_Report.pdf';
-                    document.body.appendChild(a);
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-                    document.body.removeChild(a);
-                } catch (error) {
-                    alert(`Error downloading PDF: ${error.message}`);
-                } finally {
-                    toggleLoading(downloadPdfBtn, false);
-                }
-            }
+            // ---------------------- downloadSelectedPdf (REPLACE) ----------------------
+async function downloadSelectedPdf() {
+    const selectedValues = Array.from(document.querySelectorAll('.report-selection:checked'))
+        .map(checkbox => checkbox.value);
+
+    if (selectedValues.length === 0) {
+        alert('Please select at least one report or summary to download.');
+        return;
+    }
+
+    // Separate selected ids into two buckets:
+    // - generated report ids like "claim-0-question-1"
+    // - summary ids like "claim-0-summary"
+    const selectedReportIds = selectedValues.filter(id => !id.endsWith('-summary'));
+    const selectedSummaryIds = selectedValues.filter(id => id.endsWith('-summary'));
+
+    // Build inline summary_contents for any selected summary ids
+    const summary_contents = selectedSummaryIds.map(id => {
+        // id is "claim-<i>-summary"
+        const claimIdx = parseInt(id.split('-')[1]);
+        const claimText = document.querySelector(`#claim-${claimIdx} .claim-text`)?.textContent || `Claim ${claimIdx + 1}`;
+        const modelVerdictEl = document.querySelector(`#model-verdict-claim-${claimIdx}`);
+        const externalVerdictEl = document.querySelector(`#external-verdict-claim-${claimIdx}`);
+        const modelHtml = modelVerdictEl ? modelVerdictEl.innerHTML : '';
+        const externalHtml = externalVerdictEl ? externalVerdictEl.innerHTML : '';
+
+        // Provide both text and sanitized-ish HTML for backend flexibility
+        return {
+            id,
+            claimIdx,
+            title: claimText,
+            model_verdict_text: modelVerdictEl ? modelVerdictEl.textContent : '',
+            external_verification_text: externalVerdictEl ? externalVerdictEl.textContent : '',
+            // send innerHTML so backend can render formatted content into PDF if supported
+            model_verdict_html: modelHtml,
+            external_verification_html: externalHtml
+        };
+    });
+
+    const payload = {
+        selected_reports: selectedReportIds,
+        summary_contents: summary_contents
+    };
+
+    toggleLoading(downloadPdfBtn, true, 'Generating PDF...');
+
+    try {
+        const response = await fetch('/export-pdf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || `PDF generation failed: ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'SciCheck_AI_Report.pdf';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    } catch (error) {
+        alert(`Error downloading PDF: ${error.message}`);
+    } finally {
+        toggleLoading(downloadPdfBtn, false);
+    }
+}
+// ---------------------- end downloadSelectedPdf ----------------------
 
             // Event Listeners
             inputMethodSelect.addEventListener('change', (event) => {
