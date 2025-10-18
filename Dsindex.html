@@ -1050,13 +1050,16 @@
     }
     }
 
-            function updatePdfSelectionList() {
+           function updatePdfSelectionList() {
+    const previouslyChecked = new Set(
+        Array.from(document.querySelectorAll('.report-selection:checked')).map(c => c.value)
+    );
+
     pdfSelectionList.innerHTML = '';
+    const foundItems = [];
 
-    // Collect all model verdicts and external verifications
+    // 1️⃣ Include model verdict + external verification summaries
     const allClaims = document.querySelectorAll('.claim-card');
-    let foundItems = [];
-
     allClaims.forEach((claim, i) => {
         const claimText = claim.querySelector('.claim-text')?.textContent?.trim() || `Claim ${i + 1}`;
         const modelVerdict = claim.querySelector(`#model-verdict-claim-${i}`)?.textContent?.trim() || '';
@@ -1068,13 +1071,14 @@
             foundItems.push({
                 id: `claim-${i}-summary`,
                 claimIdx: i,
+                questionIdx: null,
                 claimText,
                 questionText: 'Model verdict + external verification'
             });
         }
     });
 
-    // Collect generated reports as before
+    // 2️⃣ Include generated reports (streamed or completed)
     const allReportContainers = document.querySelectorAll('[id^="report-claim-"]');
     allReportContainers.forEach(container => {
         const reportBox = container.querySelector('.report-box');
@@ -1084,24 +1088,31 @@
             const questionIdx = parseInt(idParts[4]);
             const claimText = document.querySelector(`#claim-${claimIdx} .claim-text`)?.textContent || `Claim ${claimIdx + 1}`;
             const questionText = document.querySelector(`#questions-list-claim-${claimIdx} li:nth-child(${questionIdx + 1}) span`)?.textContent?.replace(/Q\d+:/, '').trim() || `Question ${questionIdx + 1}`;
-            foundItems.push({
-                id: container.id.replace('report-', ''),
-                claimIdx,
-                questionIdx,
-                claimText,
-                questionText
-            });
+
+            const id = container.id.replace('report-', '');
+            if (!foundItems.find(f => f.id === id)) {
+                foundItems.push({
+                    id,
+                    claimIdx,
+                    questionIdx,
+                    claimText,
+                    questionText
+                });
+            }
         }
     });
 
+    // 3️⃣ Render UI checkboxes
     if (foundItems.length === 0) {
-        pdfSelectionList.innerHTML = '<p class="text-muted">No analysis content available yet. Run analysis first.</p>';
+        pdfSelectionList.innerHTML = '<p class="text-muted">No analysis data yet. Run analysis first.</p>';
     } else {
         foundItems.forEach(item => {
             const div = document.createElement('div');
             div.className = 'form-check mb-2';
+            const isChecked = previouslyChecked.has(item.id) || previouslyChecked.size === 0;
             div.innerHTML = `
-                <input class="form-check-input report-selection" type="checkbox" id="pdf-${item.id}" value="${item.id}" checked>
+                <input class="form-check-input report-selection" type="checkbox"
+                    id="pdf-${item.id}" value="${item.id}" ${isChecked ? 'checked' : ''}>
                 <label class="form-check-label" for="pdf-${item.id}">
                     <strong>Claim ${item.claimIdx + 1}:</strong> ${item.claimText.substring(0, 80)}${item.claimText.length > 80 ? '...' : ''}<br>
                     <small class="text-muted">${item.questionText}</small>
@@ -1111,9 +1122,9 @@
         });
     }
 
-    // Always show the section
+    // 4️⃣ Always show section
     pdfDownloadSection.classList.remove('d-none');
-        }
+} 
 
             async function downloadSelectedPdf() {
                 const selectedReports = Array.from(document.querySelectorAll('.report-selection:checked'))
