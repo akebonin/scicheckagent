@@ -622,7 +622,11 @@
                         throw new Error(data.error || 'Failed to process video');
                     }
 
-                    alert(`Video processing note: ${data.note}\n\nPlease paste the transcription manually for now.`);
+                    textInput.value = data.transcription;
+                    inputMethodSelect.value = 'paste';
+                    inputMethodSelect.dispatchEvent(new Event('change'));
+
+                    alert(`Video processing note: ${data.note}`);
 
                 } catch (error) {
                     alert(`Error processing video: ${error.message}`);
@@ -657,7 +661,11 @@
                         throw new Error(data.error || 'Failed to transcribe video URL');
                     }
 
-                    alert(`Video URL transcription note: ${data.note}\n\nPlease paste the transcription manually for now.`);
+                    textInput.value = data.transcription;
+                    inputMethodSelect.value = 'paste';
+                    inputMethodSelect.dispatchEvent(new Event('change'));
+
+                    alert(`Video URL transcription note: ${data.note}`);
 
                 } catch (error) {
                     alert(`Error transcribing video URL: ${error.message}`);
