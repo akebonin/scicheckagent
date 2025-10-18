@@ -1078,6 +1078,7 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
     selected_reports = request.json.get("selected_reports", [])
+    summary_contents = request.json.get("summary_contents", [])  # NEW: inline summaries from client
     current_article_id = session.get('current_article_id')
 
     if not current_article_id:
@@ -1088,33 +1089,94 @@ def export_pdf():
         return "Analysis session expired or not found.", 400
 
     claims_data_in_cache = article_cache_data.get('claims_data', [])
-    if not claims_data_in_cache:
+    # It's OK if no claims in cache when we are provided summary_contents (frontend may send those)
+    if not claims_data_in_cache and not summary_contents:
         return "No claims found for this analysis session.", 400
 
     pdf_reports = []
-    for claim_idx, claim_item_in_cache in enumerate(claims_data_in_cache):
-        if "model_verdict" not in claim_item_in_cache or "questions" not in claim_item_in_cache:
-            logging.warning(f"Skipping claim {claim_idx} for PDF: missing model verdict or questions in cache.")
+    added_ids = set()
+
+    # Helper: sanitize anchor tags <a href="URL">text</a> -> <link href="URL">text</link>
+    def sanitize_html_anchors(html_snippet: str) -> str:
+        if not html_snippet:
+            return ""
+        # Replace <a ... href="...">text</a> with <link href="...">text</link>
+        # This is a simple conversion and intentionally leaves other text intact.
+        html_snippet = re.sub(r'<a\s+[^>]*href=[\'"]([^\'"]+)[\'"][^>]*>(.*?)</a>',
+                              lambda m: f'<link href="{m.group(1)}">{m.group(2)}</link>',
+                              html_snippet, flags=re.IGNORECASE | re.DOTALL)
+        # Remove any remaining script/style tags (basic)
+        html_snippet = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html_snippet, flags=re.IGNORECASE | re.DOTALL)
+        # Optionally, strip unknown tags except <b>, <i>, <u>, <link>, <br>, <p>
+        html_snippet = re.sub(r'</?(?!b\b|i\b|u\b|link\b|br\b|p\b)[a-zA-Z0-9\-]+[^>]*>', '', html_snippet)
+        return html_snippet
+
+    # 1) Add inline summary_contents (sent by the frontend for claim summaries)
+    for summary in summary_contents:
+        try:
+            sid = summary.get('id') or f"summary-{len(pdf_reports)}"
+            if sid in added_ids:
+                continue
+            claim_idx = summary.get('claimIdx')
+            title = summary.get('title') or (f"Claim {claim_idx + 1}" if claim_idx is not None else "Claim")
+            # Prefer provided HTML if available (converted), otherwise fallback to plain text
+            model_html = summary.get('model_verdict_html') or ''
+            external_html = summary.get('external_verification_html') or ''
+            model_text = summary.get('model_verdict_text') or (re.sub(r'\s+', ' ', summary.get('model_verdict_html', '')) if model_html else '')
+            external_text = summary.get('external_verification_text') or (re.sub(r'\s+', ' ', summary.get('external_verification_html', '')) if external_html else '')
+
+            # sanitize anchors to ReportLab <link>
+            model_html_sanitized = sanitize_html_anchors(model_html) if model_html else re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', escape_html(model_text))
+            external_html_sanitized = sanitize_html_anchors(external_html) if external_html else re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', escape_html(external_text))
+
+            pdf_reports.append({
+                "id": sid,
+                "claim_text": title,
+                "model_verdict": model_text.strip() or '',
+                "model_verdict_html": model_html_sanitized,
+                "external_verdict": external_text.strip() or '',
+                "external_verdict_html": external_html_sanitized,
+                "sources": summary.get('sources', []),  # optional, likely empty
+                "question": "Model verdict + external verification",
+                "report": None  # no full question report for summaries
+            })
+            added_ids.add(sid)
+        except Exception as e:
+            logging.warning(f"Skipping a summary entry due to error: {e}")
             continue
 
-        for q_idx, question in enumerate(claim_item_in_cache.get('questions', [])):
-            report_key = f"q{q_idx}_report"
-            if report_key in claim_item_in_cache and claim_item_in_cache[report_key]:
-                # Check if this report is selected
-                report_id = f"claim-{claim_idx}-question-{q_idx}"
-                if not selected_reports or report_id in selected_reports:
-                    pdf_reports.append({
-                        "claim_text": claim_item_in_cache['text'],
-                        "model_verdict": claim_item_in_cache['model_verdict'],
-                        "external_verdict": claim_item_in_cache.get('external_verdict', 'Not verified externally.'),
-                        "sources": claim_item_in_cache.get('sources', []),
-                        "question": question,
-                        "report": claim_item_in_cache[report_key]
-                    })
+    # 2) Preserve original behavior: collect full question reports from cache when requested
+    if claims_data_in_cache:
+        for claim_idx, claim_item_in_cache in enumerate(claims_data_in_cache):
+            # We need model_verdict and questions to be present for full reports (same logic as before)
+            if "model_verdict" not in claim_item_in_cache or "questions" not in claim_item_in_cache:
+                logging.warning(f"Skipping claim {claim_idx} for PDF: missing model verdict or questions in cache.")
+                continue
 
+            for q_idx, question in enumerate(claim_item_in_cache.get('questions', [])):
+                report_key = f"q{q_idx}_report"
+                if report_key in claim_item_in_cache and claim_item_in_cache[report_key]:
+                    report_id = f"claim-{claim_idx}-question-{q_idx}"
+                    # If user selected specific reports, honor selection; if no selection specified, include all
+                    if not selected_reports or report_id in selected_reports:
+                        if report_id in added_ids:
+                            continue
+                        pdf_reports.append({
+                            "id": report_id,
+                            "claim_text": claim_item_in_cache.get('text', f"Claim {claim_idx + 1}"),
+                            "model_verdict": claim_item_in_cache.get('model_verdict', ''),
+                            "external_verdict": claim_item_in_cache.get('external_verdict', 'Not verified externally.'),
+                            "sources": claim_item_in_cache.get('sources', []),
+                            "question": question,
+                            "report": claim_item_in_cache[report_key]
+                        })
+                        added_ids.add(report_id)
+
+    # 3) If nothing to export, return the previous error message (but only if no summaries were provided)
     if not pdf_reports:
         return "No complete reports to export. Generate reports for at least one question first by clicking 'Generate Report'.", 400
 
+    # --- Build PDF using ReportLab (same as before, but handle HTML snippets if present) ---
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -1137,30 +1199,46 @@ def export_pdf():
             y = height - inch
         y -= 20
 
+        # Claim heading
         y = draw_paragraph(p, f"Claim: {item['claim_text']}", styles['ClaimHeading'], y, width)
-        y = draw_paragraph(p, f"<b>Model Verdict:</b> {item['model_verdict']}", styles['NormalParagraph'], y, width)
-        y = draw_paragraph(p, f"<b>External Verdict:</b> {item['external_verdict']}", styles['NormalParagraph'], y, width)
 
-        if item['sources']:
+        # Model verdict: prefer HTML snippet if available, otherwise plain text
+        model_html = item.get('model_verdict_html') or ''
+        if model_html:
+            # Basic markdown-to-Paragraph-friendly replacement for bold and links already applied earlier
+            model_html = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', model_html)
+            y = draw_paragraph(p, f"<b>Model Verdict:</b> {model_html}", styles['NormalParagraph'], y, width)
+        else:
+            y = draw_paragraph(p, f"<b>Model Verdict:</b> {item.get('model_verdict','')}", styles['NormalParagraph'], y, width)
+
+        # External verdict
+        external_html = item.get('external_verdict_html') or ''
+        if external_html:
+            external_html = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', external_html)
+            y = draw_paragraph(p, f"<b>External Verdict:</b> {external_html}", styles['NormalParagraph'], y, width)
+        else:
+            y = draw_paragraph(p, f"<b>External Verdict:</b> {item.get('external_verdict','')}", styles['NormalParagraph'], y, width)
+
+        # Sources (if any)
+        if item.get('sources'):
             y = draw_paragraph(p, "<b>External Sources:</b>", styles['SectionHeading'], y, width)
-            for src in item['sources']:
-                link_text = f"{src['title']}"
-                if src['url']:
+            for src in item.get('sources', []):
+                link_text = f"{src.get('title','')}"
+                if src.get('url'):
                     escaped_url = src['url'].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
                     link_text = f'<link href="{escaped_url}">{link_text}</link>'
                 y = draw_paragraph(p, f"- {link_text}", styles['SourceLink'], y, width)
 
-        y = draw_paragraph(p, f"<b>Research Question:</b> {item['question']}", styles['SectionHeading'], y, width)
+        # Question heading
+        y = draw_paragraph(p, f"<b>Research Question:</b> {item.get('question','')}", styles['SectionHeading'], y, width)
 
+        # Full report if present
         if item.get('report'):
             y = draw_paragraph(p, "<b>AI Research Report:</b>", styles['SectionHeading'], y, width)
 
-            # NORMALIZE THE REPORT CONTENT FOR PDF
+            # NORMALIZE THE REPORT CONTENT FOR PDF (reuse existing helpers)
             report_content_formatted = normalize_text_for_pdf(item['report'])
-
-            # CONVERT MARKDOWN TABLES TO SIMPLE TEXT
             report_content_formatted = convert_markdown_tables_to_simple_text(report_content_formatted)
-
             report_content_formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', report_content_formatted)
             report_content_formatted = re.sub(r'\[(.*?)\]\((https?://[^\s\]]+)\)', r'<link href="\2">\1</link>', report_content_formatted)
 
