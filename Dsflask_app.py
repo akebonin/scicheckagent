@@ -26,6 +26,7 @@ from openai import OpenAI
 from moviepy.editor import VideoFileClip
 import yt_dlp
 import unicodedata
+import html
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -1075,10 +1076,52 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
 
     return Response(stream_response(), mimetype='text/event-stream')
 
+# Add this new endpoint to Dsflask_app.py (anywhere after the other API endpoints)
+
+@app.route("/api/available-reports", methods=["GET"])
+def get_available_reports():
+    """Get list of all available reports for the current session"""
+    current_article_id = session.get('current_article_id')
+    
+    if not current_article_id:
+        return jsonify({"error": "No active analysis session found."}), 400
+    
+    article_cache_data = get_analysis(current_article_id)
+    if not article_cache_data:
+        return jsonify({"error": "Analysis session expired or not found."}), 400
+    
+    claims_data_in_cache = article_cache_data.get('claims_data', [])
+    available_reports = []
+    
+    # Add model verdicts and external verifications
+    for claim_idx, claim_data in enumerate(claims_data_in_cache):
+        claim_text_preview = claim_data.get('text', '')[:80] + '...' if len(claim_data.get('text', '')) > 80 else claim_data.get('text', '')
+        
+        # Add model verdict if available
+        if claim_data.get('model_verdict'):
+            available_reports.append({
+                "id": f"claim-{claim_idx}-summary",
+                "type": f"Claim {claim_idx + 1} - Model Verdict & External Verification",
+                "description": f"Model analysis and external sources for: {claim_text_preview}"
+            })
+        
+        # Add question reports if available
+        questions = claim_data.get('questions', [])
+        for q_idx, question in enumerate(questions):
+            report_key = f"q{q_idx}_report"
+            if claim_data.get(report_key):
+                available_reports.append({
+                    "id": f"claim-{claim_idx}-question-{q_idx}",
+                    "type": f"Claim {claim_idx + 1} - Question Report {q_idx + 1}",
+                    "description": f"Research report for: {question[:100]}..."
+                })
+    
+    return jsonify(available_reports)
+
+# Update the existing export-pdf endpoint (replace the entire function)
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
     selected_reports = request.json.get("selected_reports", [])
-    summary_contents = request.json.get("summary_contents", [])  # NEW: inline summaries from client
     current_article_id = session.get('current_article_id')
 
     if not current_article_id:
@@ -1089,94 +1132,67 @@ def export_pdf():
         return "Analysis session expired or not found.", 400
 
     claims_data_in_cache = article_cache_data.get('claims_data', [])
-    # It's OK if no claims in cache when we are provided summary_contents (frontend may send those)
-    if not claims_data_in_cache and not summary_contents:
+    
+    if not claims_data_in_cache:
         return "No claims found for this analysis session.", 400
 
     pdf_reports = []
     added_ids = set()
 
-    # Helper: sanitize anchor tags <a href="URL">text</a> -> <link href="URL">text</link>
-    def sanitize_html_anchors(html_snippet: str) -> str:
-        if not html_snippet:
-            return ""
-        # Replace <a ... href="...">text</a> with <link href="...">text</link>
-        # This is a simple conversion and intentionally leaves other text intact.
-        html_snippet = re.sub(r'<a\s+[^>]*href=[\'"]([^\'"]+)[\'"][^>]*>(.*?)</a>',
-                              lambda m: f'<link href="{m.group(1)}">{m.group(2)}</link>',
-                              html_snippet, flags=re.IGNORECASE | re.DOTALL)
-        # Remove any remaining script/style tags (basic)
-        html_snippet = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html_snippet, flags=re.IGNORECASE | re.DOTALL)
-        # Optionally, strip unknown tags except <b>, <i>, <u>, <link>, <br>, <p>
-        html_snippet = re.sub(r'</?(?!b\b|i\b|u\b|link\b|br\b|p\b)[a-zA-Z0-9\-]+[^>]*>', '', html_snippet)
-        return html_snippet
-
-    # 1) Add inline summary_contents (sent by the frontend for claim summaries)
-    for summary in summary_contents:
-        try:
-            sid = summary.get('id') or f"summary-{len(pdf_reports)}"
-            if sid in added_ids:
-                continue
-            claim_idx = summary.get('claimIdx')
-            title = summary.get('title') or (f"Claim {claim_idx + 1}" if claim_idx is not None else "Claim")
-            # Prefer provided HTML if available (converted), otherwise fallback to plain text
-            model_html = summary.get('model_verdict_html') or ''
-            external_html = summary.get('external_verification_html') or ''
-            model_text = summary.get('model_verdict_text') or (re.sub(r'\s+', ' ', summary.get('model_verdict_html', '')) if model_html else '')
-            external_text = summary.get('external_verification_text') or (re.sub(r'\s+', ' ', summary.get('external_verification_html', '')) if external_html else '')
-
-            # sanitize anchors to ReportLab <link>
-            model_html_sanitized = sanitize_html_anchors(model_html) if model_html else re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', escape_html(model_text))
-            external_html_sanitized = sanitize_html_anchors(external_html) if external_html else re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', escape_html(external_text))
-
-            pdf_reports.append({
-                "id": sid,
-                "claim_text": title,
-                "model_verdict": model_text.strip() or '',
-                "model_verdict_html": model_html_sanitized,
-                "external_verdict": external_text.strip() or '',
-                "external_verdict_html": external_html_sanitized,
-                "sources": summary.get('sources', []),  # optional, likely empty
-                "question": "Model verdict + external verification",
-                "report": None  # no full question report for summaries
-            })
-            added_ids.add(sid)
-        except Exception as e:
-            logging.warning(f"Skipping a summary entry due to error: {e}")
+    # Process selected reports based on their IDs
+    for report_id in selected_reports:
+        if report_id in added_ids:
             continue
-
-    # 2) Preserve original behavior: collect full question reports from cache when requested
-    if claims_data_in_cache:
-        for claim_idx, claim_item_in_cache in enumerate(claims_data_in_cache):
-            # We need model_verdict and questions to be present for full reports (same logic as before)
-            if "model_verdict" not in claim_item_in_cache or "questions" not in claim_item_in_cache:
-                logging.warning(f"Skipping claim {claim_idx} for PDF: missing model verdict or questions in cache.")
+            
+        # Parse report ID format: "claim-{idx}-summary" or "claim-{idx}-question-{q_idx}"
+        if report_id.endswith('-summary'):
+            # This is a model verdict + external verification summary
+            try:
+                claim_idx = int(report_id.split('-')[1])
+                claim_data = claims_data_in_cache[claim_idx]
+                
+                pdf_reports.append({
+                    "id": report_id,
+                    "claim_text": claim_data.get('text', f"Claim {claim_idx + 1}"),
+                    "model_verdict": claim_data.get('model_verdict', ''),
+                    "external_verdict": claim_data.get('external_verdict', 'Not verified externally.'),
+                    "sources": claim_data.get('sources', []),
+                    "question": "Model verdict + external verification",
+                    "report": None
+                })
+                added_ids.add(report_id)
+            except (IndexError, ValueError) as e:
+                logging.warning(f"Invalid summary report ID format: {report_id}")
+                continue
+                
+        elif 'question' in report_id:
+            # This is a question report: "claim-{idx}-question-{q_idx}"
+            try:
+                parts = report_id.split('-')
+                claim_idx = int(parts[1])
+                q_idx = int(parts[3])
+                claim_data = claims_data_in_cache[claim_idx]
+                
+                report_key = f"q{q_idx}_report"
+                if report_key in claim_data and claim_data[report_key]:
+                    pdf_reports.append({
+                        "id": report_id,
+                        "claim_text": claim_data.get('text', f"Claim {claim_idx + 1}"),
+                        "model_verdict": claim_data.get('model_verdict', ''),
+                        "external_verdict": claim_data.get('external_verdict', 'Not verified externally.'),
+                        "sources": claim_data.get('sources', []),
+                        "question": claim_data.get('questions', [''])[q_idx],
+                        "report": claim_data[report_key]
+                    })
+                    added_ids.add(report_id)
+            except (IndexError, ValueError) as e:
+                logging.warning(f"Invalid question report ID format: {report_id}")
                 continue
 
-            for q_idx, question in enumerate(claim_item_in_cache.get('questions', [])):
-                report_key = f"q{q_idx}_report"
-                if report_key in claim_item_in_cache and claim_item_in_cache[report_key]:
-                    report_id = f"claim-{claim_idx}-question-{q_idx}"
-                    # If user selected specific reports, honor selection; if no selection specified, include all
-                    if not selected_reports or report_id in selected_reports:
-                        if report_id in added_ids:
-                            continue
-                        pdf_reports.append({
-                            "id": report_id,
-                            "claim_text": claim_item_in_cache.get('text', f"Claim {claim_idx + 1}"),
-                            "model_verdict": claim_item_in_cache.get('model_verdict', ''),
-                            "external_verdict": claim_item_in_cache.get('external_verdict', 'Not verified externally.'),
-                            "sources": claim_item_in_cache.get('sources', []),
-                            "question": question,
-                            "report": claim_item_in_cache[report_key]
-                        })
-                        added_ids.add(report_id)
-
-    # 3) If nothing to export, return the previous error message (but only if no summaries were provided)
     if not pdf_reports:
-        return "No complete reports to export. Generate reports for at least one question first by clicking 'Generate Report'.", 400
+        return "No valid reports selected for export.", 400
 
-    # --- Build PDF using ReportLab (same as before, but handle HTML snippets if present) ---
+    # Continue with the existing PDF generation code...
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -1202,22 +1218,11 @@ def export_pdf():
         # Claim heading
         y = draw_paragraph(p, f"Claim: {item['claim_text']}", styles['ClaimHeading'], y, width)
 
-        # Model verdict: prefer HTML snippet if available, otherwise plain text
-        model_html = item.get('model_verdict_html') or ''
-        if model_html:
-            # Basic markdown-to-Paragraph-friendly replacement for bold and links already applied earlier
-            model_html = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', model_html)
-            y = draw_paragraph(p, f"<b>Model Verdict:</b> {model_html}", styles['NormalParagraph'], y, width)
-        else:
-            y = draw_paragraph(p, f"<b>Model Verdict:</b> {item.get('model_verdict','')}", styles['NormalParagraph'], y, width)
+        # Model verdict
+        y = draw_paragraph(p, f"<b>Model Verdict:</b> {item.get('model_verdict','')}", styles['NormalParagraph'], y, width)
 
         # External verdict
-        external_html = item.get('external_verdict_html') or ''
-        if external_html:
-            external_html = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', external_html)
-            y = draw_paragraph(p, f"<b>External Verdict:</b> {external_html}", styles['NormalParagraph'], y, width)
-        else:
-            y = draw_paragraph(p, f"<b>External Verdict:</b> {item.get('external_verdict','')}", styles['NormalParagraph'], y, width)
+        y = draw_paragraph(p, f"<b>External Verdict:</b> {item.get('external_verdict','')}", styles['NormalParagraph'], y, width)
 
         # Sources (if any)
         if item.get('sources'):
@@ -1236,7 +1241,6 @@ def export_pdf():
         if item.get('report'):
             y = draw_paragraph(p, "<b>AI Research Report:</b>", styles['SectionHeading'], y, width)
 
-            # NORMALIZE THE REPORT CONTENT FOR PDF (reuse existing helpers)
             report_content_formatted = normalize_text_for_pdf(item['report'])
             report_content_formatted = convert_markdown_tables_to_simple_text(report_content_formatted)
             report_content_formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', report_content_formatted)
