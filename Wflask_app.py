@@ -25,6 +25,8 @@ import pytesseract
 from openai import OpenAI
 from moviepy.editor import VideoFileClip
 import yt_dlp
+import unicodedata  # Added for Unicode normalization
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -179,6 +181,16 @@ verification_prompts = {
 }
 
 # Helper functions
+
+def normalize_text(text):
+    """Normalize Unicode characters to ASCII and replace specific characters."""
+    if not text:
+        return text
+    # Normalize to decomposed form and encode to ASCII, ignoring non-ASCII characters
+    text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('ASCII')
+    # Replace specific characters
+    text = text.replace('β', 'beta').replace('–', '-').replace('—', '-').replace('’', "'")
+    return text
 
 def call_openrouter(prompt, stream=False, temperature=0.0, json_mode=False):
     """Calls the OpenRouter API, supports streaming and JSON mode."""
@@ -944,7 +956,9 @@ def generate_report():
     report_key = f"q{question_idx}_report"
     if report_key in claim_data_in_cache and claim_data_in_cache[report_key]:
         def stream_cached_report():
-            yield f"data: {json.dumps({'content': claim_data_in_cache[report_key]})}\n\n"
+            # Normalize cached report content
+            normalized_report = normalize_text(claim_data_in_cache[report_key])
+            yield f"data: {json.dumps({'content': normalized_report})}\n\n"
             yield f"data: [DONE]\n\n"
         return Response(stream_cached_report(), mimetype='text/event-stream')
 
@@ -1006,8 +1020,10 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
                                 json_data = json.loads(data_part)
                                 content = json_data['choices'][0]['delta'].get('content', '')
                                 if content:
-                                    full_report_content += content
-                                    yield f"data: {json.dumps({'content': content})}\n\n"
+                                    # Normalize content for streaming
+                                    normalized_content = normalize_text(content)
+                                    full_report_content += content  # Store original for cache
+                                    yield f"data: {json.dumps({'content': normalized_content})}\n\n"
                                 if json_data['choices'][0].get('finish_reason') == 'stop':
                                     break
                             except json.JSONDecodeError:
@@ -1024,6 +1040,7 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
             yield error_message
         finally:
             if full_report_content:
+                # Store original content in cache, normalization happens on retrieval
                 claim_data_in_cache[report_key] = full_report_content
                 # Update the session data
                 store_analysis(current_article_id, article_cache_data)
@@ -1031,6 +1048,7 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
             yield f"data: [DONE]\n\n"
 
     return Response(stream_response(), mimetype='text/event-stream')
+    
 
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
@@ -1062,11 +1080,11 @@ def export_pdf():
                 if not selected_reports or report_id in selected_reports:
                     pdf_reports.append({
                         "claim_text": claim_item_in_cache['text'],
-                        "model_verdict": claim_item_in_cache['model_verdict'],
-                        "external_verdict": claim_item_in_cache.get('external_verdict', 'Not verified externally.'),
+                        "model_verdict": normalize_text(claim_item_in_cache['model_verdict']),
+                        "external_verdict": normalize_text(claim_item_in_cache.get('external_verdict', 'Not verified externally.')),
                         "sources": claim_item_in_cache.get('sources', []),
-                        "question": question,
-                        "report": claim_item_in_cache[report_key]
+                        "question": normalize_text(question),
+                        "report": normalize_text(claim_item_in_cache[report_key])
                     })
 
     if not pdf_reports:
@@ -1121,6 +1139,8 @@ def export_pdf():
 
 def draw_paragraph(pdf_canvas, text_content, style, y_pos, page_width, left_margin=0.75*inch, right_margin=0.75*inch):
     available_width = page_width - left_margin - right_margin
+    # Normalize text for PDF rendering
+    text_content = normalize_text(text_content)
     # Replace markdown newlines with HTML <br/> for ReportLab Paragraph
     text_content = text_content.replace('\n', '<br/>')
     para = Paragraph(text_content, style)
