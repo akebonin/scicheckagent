@@ -960,110 +960,168 @@
             }
 
             async function generateReport(claimIdx, questionIdx, reportContainerId, button) {
-                const reportContainer = document.getElementById(reportContainerId);
-                reportContainer.innerHTML = '<div class="report-box text-center"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div> Generating report...</div>';
-                
-                if (button) {
-                    button.disabled = true;
-                }
-                
-                try {
-                    const response = await fetch('/api/generate-report', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ claim_idx: claimIdx, question_idx: questionIdx })
-                    });
-                    
-                    if (!response.ok) {
-                        const errorData = await response.json();
-                        throw new Error(errorData.error || `Failed to start report generation: ${response.status}`);
-                    }
-                    
-                    reportContainer.innerHTML = '<div class="report-box"></div>';
-                    const reportBox = reportContainer.querySelector('.report-box');
-                    const reader = response.body.getReader();
-                    const decoder = new TextDecoder();
-                    
-                    while (true) {
-                        const { value, done } = await reader.read();
-                        if (done) break;
+    const reportContainer = document.getElementById(reportContainerId);
+    reportContainer.innerHTML = '<div class="report-box text-center"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div> Generating report...</div>';
+    
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = 'Generating...'; // Visual feedback
+    }
+    
+    try {
+        const response = await fetch('/api/generate-report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ claim_idx: claimIdx, question_idx: questionIdx })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `Failed to start report generation: ${response.status}`);
+        }
+        
+        reportContainer.innerHTML = '<div class="report-box"></div>';
+        const reportBox = reportContainer.querySelector('.report-box');
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        
+        let fullContent = '';
+        
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n\n');
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const dataPart = line.substring(6).trim();
+                    if (dataPart === '[DONE]') {
+                        // Final update when streaming is complete
+                        reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
                         
-                        const chunk = decoder.decode(value, { stream: true });
-                        const lines = chunk.split('\n\n');
-                        
-                        for (const line of lines) {
-                            if (line.startsWith('data: ')) {
-                                const dataPart = line.substring(6).trim();
-                                if (dataPart === '[DONE]') break;
-                                
-                                try {
-                                    const jsonData = JSON.parse(dataPart);
-                                    if (jsonData.content) {
-                                        reportBox.innerHTML += jsonData.content.replace(/\n/g, '<br>');
-                                    }
-                                    
-                                    if (jsonData.error) {
-                                        reportBox.innerHTML += `<br><strong class="text-danger">Error: ${escapeHTML(jsonData.error)}</strong>`;
-                                        return;
-                                    }
-                                } catch (e) {
-                                    console.warn("Error parsing SSE chunk or non-JSON data:", e, "Chunk:", dataPart);
-                                }
-                            }
+                        // Ensure the report is tracked in our array
+                        const reportId = `claim-${claimIdx}-question-${questionIdx}`;
+                        if (!generatedReports.find(r => r.id === reportId)) {
+                            const claimElement = document.querySelector(`#claim-${claimIdx} .claim-text`);
+                            const questionElement = document.querySelector(`#questions-list-claim-${claimIdx} li:nth-child(${questionIdx + 1}) span`);
+                            
+                            generatedReports.push({
+                                id: reportId,
+                                claimIdx: claimIdx,
+                                questionIdx: questionIdx,
+                                claimText: claimElement ? claimElement.textContent : `Claim ${claimIdx + 1}`,
+                                questionText: questionElement ? questionElement.textContent.replace(`Q${questionIdx + 1}:`, '').trim() : `Question ${questionIdx + 1}`
+                            });
                         }
+                        
+                        // Update PDF selection with a small delay to ensure DOM is updated
+                        setTimeout(updatePdfSelectionList, 500);
+                        break;
                     }
                     
-                    // Re-format the entire report at the end to correctly apply markdown and tables
-                    const finalContent = reportBox.textContent;
-                    reportBox.innerHTML = formatTextWithMarkdownAndLinks(finalContent);
-                    
-                    // Update PDF selection list when report is generated
-                    updatePdfSelectionList();
-                } catch (error) {
-                    reportContainer.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
-                } finally {
-                    if (button) {
-                        button.disabled = false;
+                    try {
+                        const jsonData = JSON.parse(dataPart);
+                        if (jsonData.content) {
+                            fullContent += jsonData.content;
+                            reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
+                        }
+                        
+                        if (jsonData.error) {
+                            reportBox.innerHTML += `<br><strong class="text-danger">Error: ${escapeHTML(jsonData.error)}</strong>`;
+                            return;
+                        }
+                    } catch (e) {
+                        console.warn("Error parsing SSE chunk:", e, "Chunk:", dataPart);
                     }
                 }
             }
+        }
+        
+    } catch (error) {
+        console.error('Report generation error:', error);
+        reportContainer.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = 'Generate Report';
+        }
+    }
+    }
 
             function updatePdfSelectionList() {
-                pdfSelectionList.innerHTML = '';
+    console.log('updatePdfSelectionList called'); // DEBUG
+    pdfSelectionList.innerHTML = '';
+    
+    // First, let's scan ALL possible report containers, not just the ones in generatedReports
+    let foundReports = [];
+    const allReportContainers = document.querySelectorAll('[id^="report-claim-"]');
+    
+    console.log('Found report containers:', allReportContainers.length); // DEBUG
+    
+    allReportContainers.forEach(container => {
+        const reportBox = container.querySelector('.report-box');
+        if (reportBox) {
+            const textContent = reportBox.textContent || '';
+            const hasSubstantialContent = textContent.trim().length > 100 && 
+                                        !textContent.includes('Generating report') &&
+                                        !textContent.includes('Loading...') &&
+                                        !textContent.includes('Error:');
+            
+            console.log('Report container:', container.id, 'Content length:', textContent.length, 'Substantial:', hasSubstantialContent); // DEBUG
+            
+            if (hasSubstantialContent) {
+                // Extract claimIdx and questionIdx from the ID
+                const idParts = container.id.split('-');
+                const claimIdx = parseInt(idParts[2]);
+                const questionIdx = parseInt(idParts[4]);
                 
-                const anyReportGenerated = generatedReports.some(report => {
-                    const reportId = `report-claim-${report.claimIdx}-${report.questionIdx}`;
-                    const reportContainer = document.getElementById(reportId);
-                    return reportContainer && reportContainer.querySelector('.report-box') && reportContainer.querySelector('.report-box').textContent.length > 5;
+                // Get claim text
+                const claimElement = document.querySelector(`#claim-${claimIdx} .claim-text`);
+                const claimText = claimElement ? claimElement.textContent : `Claim ${claimIdx + 1}`;
+                
+                // Get question text
+                const questionElement = document.querySelector(`#questions-list-claim-${claimIdx} li:nth-child(${questionIdx + 1}) span`);
+                const questionText = questionElement ? questionElement.textContent.replace(`Q${questionIdx + 1}:`, '').trim() : `Question ${questionIdx + 1}`;
+                
+                foundReports.push({
+                    id: container.id.replace('report-', ''),
+                    claimIdx: claimIdx,
+                    questionIdx: questionIdx,
+                    claimText: claimText,
+                    questionText: questionText
                 });
-                
-                if (!anyReportGenerated) {
-                    pdfSelectionList.innerHTML = '<p class="text-muted">No reports generated yet. Generate a report to enable PDF export.</p>';
-                    pdfDownloadSection.classList.add('d-none');
-                    return;
-                }
-                
-                generatedReports.forEach(report => {
-                    const reportId = `report-claim-${report.claimIdx}-${report.questionIdx}`;
-                    const reportContainer = document.getElementById(reportId);
-                    
-                    if (reportContainer && reportContainer.querySelector('.report-box') && reportContainer.querySelector('.report-box').textContent.length > 5) {
-                        const div = document.createElement('div');
-                        div.className = 'form-check';
-                        div.innerHTML = `
-                            <input class="form-check-input report-selection" type="checkbox"
-                                id="pdf-${report.id}" value="${report.id}" checked>
-                            <label class="form-check-label" for="pdf-${report.id}">
-                                <strong>Claim ${report.claimIdx + 1}:</strong> ${report.claimText.substring(0, 100)}...<br>
-                                <small class="text-muted">Q: ${report.questionText}</small>
-                            </label>
-                        `;
-                        pdfSelectionList.appendChild(div);
-                    }
-                });
-                
-                pdfDownloadSection.classList.remove('d-none');
             }
+        }
+    });
+    
+    console.log('Found substantial reports:', foundReports.length); // DEBUG
+    
+    if (foundReports.length === 0) {
+        pdfSelectionList.innerHTML = '<p class="text-muted">No complete reports available for export. Generate reports by clicking "Generate Report" buttons.</p>';
+        pdfDownloadSection.classList.add('d-none');
+        return;
+    }
+    
+    // Build the selection UI
+    foundReports.forEach(report => {
+        const div = document.createElement('div');
+        div.className = 'form-check mb-2';
+        div.innerHTML = `
+            <input class="form-check-input report-selection" type="checkbox"
+                id="pdf-${report.id}" value="${report.id}" checked>
+            <label class="form-check-label" for="pdf-${report.id}">
+                <strong>Claim ${report.claimIdx + 1}:</strong> ${report.claimText.substring(0, 80)}${report.claimText.length > 80 ? '...' : ''}<br>
+                <small class="text-muted">Q: ${report.questionText.substring(0, 60)}${report.questionText.length > 60 ? '...' : ''}</small>
+            </label>
+        `;
+        pdfSelectionList.appendChild(div);
+    });
+    
+    pdfDownloadSection.classList.remove('d-none');
+    console.log('PDF section should now be visible'); // DEBUG
+        }
 
             async function downloadSelectedPdf() {
                 const selectedReports = Array.from(document.querySelectorAll('.report-selection:checked'))
