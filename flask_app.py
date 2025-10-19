@@ -380,7 +380,7 @@ def analyze_image_with_ocr(image_path):
         return extracted_text.strip()
     except Exception as e:
         logging.error(f"OCR processing failed: {e}")
-        return []
+        return ""
 
 def transcribe_video(video_path, max_retries=5, retry_delay=5):
     """Transcribe uploaded video using Whisper API"""
