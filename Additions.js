@@ -1,3 +1,41 @@
+def transcribe_video(video_path):
+    """Transcribe uploaded video using free whisper-api.com"""
+    try:
+        # Extract audio from video
+        audio_path = video_path + ".mp3"
+        video_clip = VideoFileClip(video_path)
+        video_clip.audio.write_audiofile(audio_path)
+        video_clip.close()
+
+        # Use free whisper-api.com instead of OpenAI
+        with open(audio_path, "rb") as audio_file:
+            files = {"file": audio_file}
+            response = requests.post(
+                "https://whisper-api.com/api/v1/transcribe",
+                files=files,
+                timeout=60
+            )
+        
+        if response.status_code == 200:
+            result = response.json()
+            transcription = result.get("text", "")
+        else:
+            raise ValueError(f"Whisper API error: {response.status_code} - {response.text}")
+
+        # Clean up audio file
+        os.remove(audio_path)
+        logging.info(f"Video transcribed successfully using free API: {video_path}")
+        return transcription
+        
+    except Exception as e:
+        logging.error(f"Free API transcription failed: {e}")
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+        raise ValueError(f"Failed to transcribe video: {str(e)}")
+
+
+
+
 import unicodedata  # Added for Unicode normalization
 
 # ... (other imports remain unchanged)
