@@ -94,10 +94,10 @@ init_db()
 # API Configuration
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    logging.error("OPENAI_API_KEY not set. Video transcription will fail.")
-client = OpenAI(api_key=OPENAI_API_KEY)
+# OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# if not OPENAI_API_KEY:
+   # logging.error("OPENAI_API_KEY not set. Video transcription will fail.")
+# client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Base prompt templates for consolidation
 BASE_EXTRACTION_RULES = '''
@@ -386,7 +386,7 @@ def analyze_image_with_ocr(image_path):
         logging.error(f"OCR processing failed: {e}")
         return ""
 
-def transcribe_video(video_path):
+# def transcribe_video(video_path):
     """Transcribe uploaded video using free whisper-api.com"""
     try:
         # Extract audio from video
@@ -426,7 +426,7 @@ def transcribe_video(video_path):
             os.remove(audio_path)
         raise ValueError(f"Failed to transcribe video: {str(e)}")
 
-def transcribe_from_url(video_url):
+# def transcribe_from_url(video_url):
     """Transcribe video URL using free whisper-api.com"""
     try:
         # Download audio using yt-dlp
@@ -909,7 +909,7 @@ def process_image():
         logging.error(f"Error in process_image endpoint: {e}")
         return jsonify({"error": f"Failed to process image: {str(e)}"}), 500
 
-@app.route("/api/process-video", methods=["POST"])
+# @app.route("/api/process-video", methods=["POST"])
 def process_video():
     """Process uploaded video and extract transcription using Whisper."""
     try:
@@ -941,7 +941,7 @@ def process_video():
         logging.error(f"Error in process_video endpoint: {e}")
         return jsonify({"error": f"Failed to process video: {str(e)}"}), 500
 
-@app.route("/api/transcribe-video-url", methods=["POST"])
+# @app.route("/api/transcribe-video-url", methods=["POST"])
 def transcribe_video_url():
     """Transcribe video from URL using Whisper."""
     try:
