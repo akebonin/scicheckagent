@@ -1,3 +1,127 @@
+// Add this helper function
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = error => reject(error);
+    });
+}
+
+// Replace the processVideo function
+async function processVideo() {
+    if (!currentVideoFile) {
+        alert('Please select a video first');
+        return;
+    }
+    
+    toggleLoading(processVideoBtn, true, 'Processing video...');
+    
+    try {
+        // Convert video to audio first using the browser
+        const audioBlob = await extractAudioFromVideo(currentVideoFile);
+        const base64Audio = await fileToBase64(audioBlob);
+        
+        // Use your Vercel proxy URL - replace with your actual Vercel URL
+        const vercelProxyUrl = 'https://your-app.vercel.app/api/transcribe';
+        
+        const response = await fetch(vercelProxyUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audioData: base64Audio })
+        });
+        
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Failed to transcribe video');
+        }
+        
+        textInput.value = data.transcription;
+        inputMethodSelect.value = 'paste';
+        inputMethodSelect.dispatchEvent(new Event('change'));
+        alert('Video transcribed successfully! Ready for analysis.');
+    } catch (error) {
+        console.error('Video processing error:', error);
+        alert(`Error processing video: ${error.message}`);
+    } finally {
+        toggleLoading(processVideoBtn, false);
+    }
+}
+
+// Replace the transcribeVideoUrl function
+async function transcribeVideoUrl() {
+    const videoUrl = videoUrlInput.value.trim();
+    if (!videoUrl) {
+        alert('Please enter a video URL');
+        return;
+    }
+    
+    if (!videoUrl.match(/^https?:\/\/[^\s/$.?#].[^\s]*$/)) {
+        alert('Invalid URL format. Please use a valid URL starting with http:// or https://.');
+        return;
+    }
+    
+    toggleLoading(transcribeVideoUrlBtn, true, 'Transcribing...');
+    
+    try {
+        // Use your Vercel proxy URL - replace with your actual Vercel URL
+        const vercelProxyUrl = 'https://your-app.vercel.app/api/transcribe';
+        
+        const response = await fetch(vercelProxyUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audioUrl: videoUrl })
+        });
+        
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Failed to transcribe video URL');
+        }
+        
+        textInput.value = data.transcription;
+        inputMethodSelect.value = 'paste';
+        inputMethodSelect.dispatchEvent(new Event('change'));
+        alert('Video URL transcribed successfully!');
+    } catch (error) {
+        console.error('Video URL transcription error:', error);
+        alert(`Error transcribing video URL: ${error.message}`);
+    } finally {
+        toggleLoading(transcribeVideoUrlBtn, false);
+    }
+}
+
+// Helper to extract audio from video in the browser
+function extractAudioFromVideo(videoFile) {
+    return new Promise((resolve, reject) => {
+        const video = document.createElement('video');
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        video.src = URL.createObjectURL(videoFile);
+        video.crossOrigin = 'anonymous';
+        
+        video.onloadedmetadata = () => {
+            const source = audioContext.createMediaElementSource(video);
+            const destination = audioContext.createMediaStreamDestination();
+            
+            source.connect(destination);
+            
+            video.play().then(() => {
+                // For now, we'll send the video file directly to the proxy
+                // The proxy will handle audio extraction
+                URL.revokeObjectURL(video.src);
+                resolve(videoFile);
+            }).catch(reject);
+        };
+        
+        video.onerror = reject;
+    });
+}
+
+
+
+
+
+
 def transcribe_video(video_path):
     """Transcribe uploaded video using free whisper-api.com"""
     try:
