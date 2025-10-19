@@ -9,7 +9,7 @@ from urllib.parse import quote_plus
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import Paragraph
+from reportlab.platypus import Paragraph, Table, TableStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 import logging
@@ -25,8 +25,8 @@ import pytesseract
 from openai import OpenAI
 from moviepy.editor import VideoFileClip
 import yt_dlp
-import unicodedata  # Added for Unicode normalization
-
+import unicodedata
+import html
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -46,12 +46,12 @@ def init_db():
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        CREATE TABLE IF NOT EXISTS analysis_sessions (
-            session_id TEXT PRIMARY KEY,
-            article_data TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
+    CREATE TABLE IF NOT EXISTS analysis_sessions (
+        session_id TEXT PRIMARY KEY,
+        article_data TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
     ''')
     conn.commit()
     conn.close()
@@ -60,9 +60,9 @@ def store_analysis(session_id, article_data):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        INSERT OR REPLACE INTO analysis_sessions
-        (session_id, article_data, last_accessed)
-        VALUES (?, ?, ?)
+    INSERT OR REPLACE INTO analysis_sessions
+    (session_id, article_data, last_accessed)
+    VALUES (?, ?, ?)
     ''', (session_id, json.dumps(article_data), datetime.now()))
     conn.commit()
     conn.close()
@@ -71,8 +71,8 @@ def get_analysis(session_id):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        SELECT article_data FROM analysis_sessions
-        WHERE session_id = ? AND last_accessed > ?
+    SELECT article_data FROM analysis_sessions
+    WHERE session_id = ? AND last_accessed > ?
     ''', (session_id, datetime.now() - timedelta(hours=24)))
     result = c.fetchone()
     conn.close()
@@ -82,8 +82,8 @@ def update_access_time(session_id):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
     c.execute('''
-        UPDATE analysis_sessions SET last_accessed = ?
-        WHERE session_id = ?
+    UPDATE analysis_sessions SET last_accessed = ?
+    WHERE session_id = ?
     ''', (datetime.now(), session_id))
     conn.commit()
     conn.close()
@@ -94,7 +94,6 @@ init_db()
 # API Configuration
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     logging.error("OPENAI_API_KEY not set. Video transcription will fail.")
@@ -131,29 +130,33 @@ STRICT RULES:
 extraction_templates = {
     "General Analysis of Testable Claims": f'''
 You will be given a text. Extract a **numbered list** of explicit, scientifically testable claims.
+
 {BASE_EXTRACTION_RULES}
 
 TEXT:
+
 {{text}}
 
 OUTPUT:
 ''',
-
     "Specific Focus on Scientific Claims": f'''
 You will be given a text. Extract a **numbered list** of explicit, scientifically testable claims related to science.
+
 {BASE_EXTRACTION_RULES}
 
 TEXT:
+
 {{text}}
 
 OUTPUT:
 ''',
-
     "Technology-Focused Extraction": f'''
 You will be given a text. Extract a **numbered list** of explicit, testable claims related to technology.
+
 {BASE_EXTRACTION_RULES}
 
 TEXT:
+
 {{text}}
 
 OUTPUT:
@@ -162,36 +165,23 @@ OUTPUT:
 
 verification_prompts = {
     "General Analysis of Testable Claims": f'''
-    Analyze this claim and return a structured text response. {BASE_JSON_STRUCTURE}
+Analyze this claim and return a structured text response. {BASE_JSON_STRUCTURE}
 
-    Claim: "{{claim}}"
-    ''',
-
+Claim: "{{claim}}"
+''',
     "Specific Focus on Scientific Claims": f'''
-    Analyze this scientific claim and return a structured text response. {BASE_JSON_STRUCTURE}
+Analyze this scientific claim and return a structured text response. {BASE_JSON_STRUCTURE}
 
-    Claim: "{{claim}}"
-    ''',
-
+Claim: "{{claim}}"
+''',
     "Technology-Focused Extraction": f'''
-    Evaluate this technology claim and return a structured text response. {BASE_JSON_STRUCTURE}
+Evaluate this technology claim and return a structured text response. {BASE_JSON_STRUCTURE}
 
-    Claim: "{{claim}}"
-    '''
+Claim: "{{claim}}"
+'''
 }
 
 # Helper functions
-
-def normalize_text(text):
-    """Normalize Unicode characters to ASCII and replace specific characters."""
-    if not text:
-        return text
-    # Normalize to decomposed form and encode to ASCII, ignoring non-ASCII characters
-    text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('ASCII')
-    # Replace specific characters
-    text = text.replace('β', 'beta').replace('–', '-').replace('—', '-').replace('’', "'")
-    return text
-
 def call_openrouter(prompt, stream=False, temperature=0.0, json_mode=False):
     """Calls the OpenRouter API, supports streaming and JSON mode."""
     if not OPENROUTER_API_KEY:
@@ -203,7 +193,7 @@ def call_openrouter(prompt, stream=False, temperature=0.0, json_mode=False):
     }
 
     payload = {
-        "model": "openai/gpt-oss-20b:free",
+        "model": "google/gemini-2.0-flash-exp:free",
         "messages": [{"role": "user", "content": prompt}],
         "stream": stream,
         "temperature": temperature
@@ -271,7 +261,6 @@ def extract_article_from_url(url):
             # Remove scripts, styles, navs, headers, footers for cleaner text
             for elem in body(['script', 'style', 'nav', 'header', 'footer', 'aside', '.sidebar', '.comments', '#comments']):
                 elem.decompose()
-
             raw_body_text = ' '.join(body.get_text(separator=' ', strip=True).split())
             if len(raw_body_text) > 200:
                 logging.info(f"Raw HTML body extraction yielded {len(raw_body_text)} characters.")
@@ -293,7 +282,6 @@ def extract_article_from_url(url):
 def generate_questions_for_claim(claim):
     """Generates up to 3 research questions for a claim."""
     prompt = f"For the following claim, propose up to 3 concise research questions. Only list the questions.\n\nClaim: {claim}"
-
     try:
         res = call_openrouter(prompt, temperature=0.5)
         res.raise_for_status()
@@ -363,14 +351,11 @@ def fetch_pubmed(keywords):
 
     search_query = '+'.join(keywords)
     url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={search_query}&retmode=json&retmax=3"
-
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
-
         data = response.json()
         id_list = data.get('esearchresult', {}).get('idlist', [])
-
         if not id_list:
             return []
 
@@ -378,7 +363,6 @@ def fetch_pubmed(keywords):
         details_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id={','.join(id_list)}&retmode=json"
         details_response = requests.get(details_url, timeout=10)
         details_data = details_response.json()
-
         results = []
         for pubmed_id in id_list:
             article_data = details_data.get('result', {}).get(pubmed_id, {})
@@ -387,9 +371,7 @@ def fetch_pubmed(keywords):
                 "abstract": article_data.get('abstract', 'Abstract not available'),
                 "url": f"https://pubmed.ncbi.nlm.nih.gov/{pubmed_id}/"
             })
-
         return results
-
     except Exception as e:
         logging.warning(f"PubMed API call failed: {e}")
         return []
@@ -423,10 +405,8 @@ def transcribe_video(video_path):
 
         # Clean up audio file
         os.remove(audio_path)
-
         logging.info(f"Video transcribed successfully: {video_path}")
         return transcript
-
     except Exception as e:
         logging.error(f"Video transcription failed: {e}")
         raise ValueError(f"Failed to transcribe video: {str(e)}")
@@ -445,7 +425,6 @@ def transcribe_from_url(video_url):
             }],
             'quiet': True  # Suppress console output
         }
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
             audio_path = ydl.prepare_filename(info).rsplit('.', 1)[0] + '.mp3'  # Get MP3 path
@@ -460,10 +439,8 @@ def transcribe_from_url(video_url):
 
         # Clean up audio file
         os.remove(audio_path)
-
         logging.info(f"Video URL transcribed successfully: {video_url}")
         return transcript
-
     except Exception as e:
         logging.error(f"Video URL transcription failed: {e}")
         raise ValueError(f"Failed to transcribe video URL: {str(e)}")
@@ -479,6 +456,66 @@ def save_uploaded_file(file, upload_folder="/home/scicheckagent/mysite/uploads")
     except Exception as e:
         logging.error(f"Error saving uploaded file: {e}")
         return None
+
+def normalize_text_for_pdf(text):
+    """Normalize Unicode text for PDF compatibility"""
+    if not text:
+        return text
+
+    # Normalize Unicode
+    normalized = unicodedata.normalize('NFKD', text)
+
+    # Replace problematic characters
+    replacements = {
+        '–': '-',  # en-dash
+        '—': '-',  # em-dash
+        'â': '-',
+        'â': '-',
+        'â': "'",
+        'â': '"',
+        'â': '"',
+        '¯': ' ',
+        '­': '',  # soft hyphen
+        'Î²': 'beta',
+        'Î±': 'alpha',
+        'Î³': 'gamma',
+        'â': '-',  # common mis-encoding
+    }
+
+    for old, new in replacements.items():
+        normalized = normalized.replace(old, new)
+
+    return normalized
+
+def convert_markdown_tables_to_simple_text(text):
+    """Convert markdown tables to simple text format for PDF"""
+    table_pattern = r'(\|.*\|\s*\n\|[-:\s|]+\|\s*\n(?:\|.*\|\s*\n)*)'
+
+    def replace_table(match):
+        table_text = match.group(0)
+        lines = [line.strip() for line in table_text.split('\n') if line.strip().startswith('|')]
+
+        if len(lines) < 2:
+            return table_text
+
+        # Extract cells from each line
+        table_data = []
+        for line in lines:
+            cells = [cell.strip() for cell in line.split('|')[1:-1]]  # Remove empty first/last elements
+            table_data.append(cells)
+
+        # Check if second line is a separator
+        if all(cell.replace('-', '').replace(':', '').replace(' ', '') == '' for cell in table_data[1]):
+            table_data.pop(1)  # Remove separator line
+
+        # Convert to simple text representation
+        result = []
+        for row in table_data:
+            result.append(' | '.join(row))
+
+        return '\n'.join(result) + '\n\n'
+
+    return re.sub(table_pattern, replace_table, text, flags=re.MULTILINE)
 
 # API Endpoints
 
@@ -504,10 +541,10 @@ def share_target():
     # Prioritize shared text if available
     if shared_text:
         prefill_content = shared_text
-        # If there's also a URL, append it to the text for context,
-        # but avoid re-adding if the text already contains the URL
-        if shared_url and not (shared_url in shared_text or "http" in shared_text or "www" in shared_text):
-            prefill_content += f"\n\n(Shared from: {shared_url})"
+    # If there's also a URL, append it to the text for context,
+    # but avoid re-adding if the text already contains the URL
+    if shared_url and not (shared_url in shared_text or "http" in shared_text or "www" in shared_text):
+        prefill_content += f"\n\n(Shared from: {shared_url})"
     elif shared_title and not shared_url:  # If text and title, but no URL
         prefill_content = f"{shared_title}\n\n{shared_text}"
     # If no text was highlighted/shared, but a URL was shared (e.g., sharing a link directly)
@@ -557,12 +594,10 @@ def analyze():
         "use_papers": use_papers,
         "claims_data": []
     }
-
     store_analysis(article_id, session_data)
     session['current_article_id'] = article_id
 
     extraction_prompt = extraction_templates[mode].format(text=text)
-
     try:
         logging.info("Calling OpenRouter for claim extraction...")
         res = call_openrouter(extraction_prompt)
@@ -591,9 +626,7 @@ def analyze():
             session_data["claims_data"].append({"text": claim_text})
 
         store_analysis(article_id, session_data)
-
         return jsonify({"claims": claims_list})
-
     except Exception as e:
         logging.error(f"Failed to extract claims: {e}")
         return jsonify({"error": f"Failed to extract claims: {str(e)}"}), 500
@@ -613,7 +646,6 @@ def get_claim_details():
             return jsonify({"error": "Analysis session expired or not found."}), 400
 
         claims_data_in_cache = article_cache_data.get('claims_data', [])
-
         if claim_idx is None or claim_idx >= len(claims_data_in_cache):
             return jsonify({"error": "Invalid claim index."}), 400
 
@@ -717,7 +749,6 @@ def get_claim_details():
             "questions": questions,
             "search_keywords": search_keywords
         })
-
     except Exception as e:
         logging.error(f"Error in get_claim_details: {e}")
         return jsonify({"error": f"Internal server error: {str(e)}"}), 500
@@ -755,15 +786,12 @@ def verify_external():
         logging.info(f"Fetching CrossRef sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
         crossref_sources = fetch_crossref(search_keywords_for_papers)
         time.sleep(0.5)
-
         logging.info(f"Fetching CORE sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
         core_sources = fetch_core(search_keywords_for_papers)
         time.sleep(0.5)
-
         logging.info(f"Fetching PubMed sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
         pubmed_sources = fetch_pubmed(search_keywords_for_papers)
         time.sleep(0.5)
-
         sources = crossref_sources + core_sources + pubmed_sources
 
         seen_urls = set()
@@ -847,7 +875,6 @@ def process_image():
             return jsonify({"error": "Could not extract text from image. Please ensure the image contains clear text."}), 400
 
         return jsonify({"extracted_text": extracted_text})
-
     except Exception as e:
         logging.error(f"Error in process_image endpoint: {e}")
         return jsonify({"error": f"Failed to process image: {str(e)}"}), 500
@@ -878,7 +905,6 @@ def process_video():
             pass
 
         return jsonify({"transcription": transcription})
-
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
     except Exception as e:
@@ -891,14 +917,11 @@ def transcribe_video_url():
     try:
         data = request.json
         video_url = data.get("video_url")
-
         if not video_url:
             return jsonify({"error": "No video URL provided"}), 400
 
         transcription = transcribe_from_url(video_url)
-
         return jsonify({"transcription": transcription})
-
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
     except Exception as e:
@@ -912,7 +935,6 @@ def debug_db():
     c.execute('SELECT session_id, article_data FROM analysis_sessions ORDER BY last_accessed DESC LIMIT 5')
     results = c.fetchall()
     conn.close()
-
     debug_info = []
     for session_id, article_data in results:
         try:
@@ -925,7 +947,6 @@ def debug_db():
             })
         except:
             debug_info.append({'session_id': session_id, 'error': 'Failed to parse'})
-
     return jsonify(debug_info)
 
 @app.route("/api/generate-report", methods=["POST"])
@@ -956,9 +977,7 @@ def generate_report():
     report_key = f"q{question_idx}_report"
     if report_key in claim_data_in_cache and claim_data_in_cache[report_key]:
         def stream_cached_report():
-            # Normalize cached report content
-            normalized_report = normalize_text(claim_data_in_cache[report_key])
-            yield f"data: {json.dumps({'content': normalized_report})}\n\n"
+            yield f"data: {json.dumps({'content': claim_data_in_cache[report_key]})}\n\n"
             yield f"data: [DONE]\n\n"
         return Response(stream_cached_report(), mimetype='text/event-stream')
 
@@ -1008,6 +1027,7 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
             logging.info(f"Calling OpenRouter for report generation for claim {claim_idx}, question {question_idx}...")
             response = call_openrouter(prompt, stream=True)
             response.raise_for_status()
+
             for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
                 if chunk:
                     lines = chunk.split('\n')
@@ -1020,10 +1040,18 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
                                 json_data = json.loads(data_part)
                                 content = json_data['choices'][0]['delta'].get('content', '')
                                 if content:
-                                    # Normalize content for streaming
-                                    normalized_content = normalize_text(content)
-                                    full_report_content += content  # Store original for cache
+                                    # NORMALIZE UNICODE CHARACTERS
+                                    normalized_content = unicodedata.normalize('NFKD', content)
+                                    # Replace common problematic characters
+                                    normalized_content = normalized_content.replace('–', '-').replace('—', '-')
+                                    normalized_content = normalized_content.replace('â', '-').replace('â', '-')
+                                    normalized_content = normalized_content.replace('â', "'").replace('â', '"').replace('â', '"')
+                                    normalized_content = normalized_content.replace('¯', ' ').replace('­', '')
+                                    normalized_content = normalized_content.replace('Î²', 'beta').replace('Î±', 'alpha').replace('Î³', 'gamma')
+
+                                    full_report_content += normalized_content
                                     yield f"data: {json.dumps({'content': normalized_content})}\n\n"
+
                                 if json_data['choices'][0].get('finish_reason') == 'stop':
                                     break
                             except json.JSONDecodeError:
@@ -1032,24 +1060,65 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
             # This check for 'stop' is another way to ensure we break the loop
             # if 'finish_reason' was in the last chunk
             if 'stop' in locals().get('json_data', {}).get('choices', [{}])[0].get('finish_reason', ''):
-                 pass
-
+                pass
         except Exception as e:
             logging.error(f"Error during report streaming for claim {claim_idx}, question {question_idx}: {e}")
             error_message = f"data: {json.dumps({'error': str(e)})}\n\n"
             yield error_message
         finally:
             if full_report_content:
-                # Store original content in cache, normalization happens on retrieval
                 claim_data_in_cache[report_key] = full_report_content
                 # Update the session data
                 store_analysis(current_article_id, article_cache_data)
                 update_access_time(current_article_id)
-            yield f"data: [DONE]\n\n"
+
+        yield f"data: [DONE]\n\n"
 
     return Response(stream_response(), mimetype='text/event-stream')
-    
 
+# Add this new endpoint to Dsflask_app.py (anywhere after the other API endpoints)
+
+@app.route("/api/available-reports", methods=["GET"])
+def get_available_reports():
+    """Get list of all available reports for the current session"""
+    current_article_id = session.get('current_article_id')
+
+    if not current_article_id:
+        return jsonify({"error": "No active analysis session found."}), 400
+
+    article_cache_data = get_analysis(current_article_id)
+    if not article_cache_data:
+        return jsonify({"error": "Analysis session expired or not found."}), 400
+
+    claims_data_in_cache = article_cache_data.get('claims_data', [])
+    available_reports = []
+
+    # Add model verdicts and external verifications
+    for claim_idx, claim_data in enumerate(claims_data_in_cache):
+        claim_text_preview = claim_data.get('text', '')[:80] + '...' if len(claim_data.get('text', '')) > 80 else claim_data.get('text', '')
+
+        # Add model verdict if available
+        if claim_data.get('model_verdict'):
+            available_reports.append({
+                "id": f"claim-{claim_idx}-summary",
+                "type": f"Claim {claim_idx + 1} - Model Verdict & External Verification",
+                "description": f"Model analysis and external sources for: {claim_text_preview}"
+            })
+
+        # Add question reports if available
+        questions = claim_data.get('questions', [])
+        for q_idx, question in enumerate(questions):
+            report_key = f"q{q_idx}_report"
+            if claim_data.get(report_key):
+                available_reports.append({
+                    "id": f"claim-{claim_idx}-question-{q_idx}",
+                    "type": f"Claim {claim_idx + 1} - Question Report {q_idx + 1}",
+                    "description": f"Research report for: {question[:100]}..."
+                })
+
+    return jsonify(available_reports)
+
+# Update the existing export-pdf endpoint (replace the entire function)
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
     selected_reports = request.json.get("selected_reports", [])
@@ -1063,36 +1132,71 @@ def export_pdf():
         return "Analysis session expired or not found.", 400
 
     claims_data_in_cache = article_cache_data.get('claims_data', [])
+
     if not claims_data_in_cache:
         return "No claims found for this analysis session.", 400
 
     pdf_reports = []
-    for claim_idx, claim_item_in_cache in enumerate(claims_data_in_cache):
-        if "model_verdict" not in claim_item_in_cache or "questions" not in claim_item_in_cache:
-            logging.warning(f"Skipping claim {claim_idx} for PDF: missing model verdict or questions in cache.")
+    added_ids = set()
+
+    # Process selected reports based on their IDs
+    for report_id in selected_reports:
+        if report_id in added_ids:
             continue
 
-        for q_idx, question in enumerate(claim_item_in_cache.get('questions', [])):
-            report_key = f"q{q_idx}_report"
-            if report_key in claim_item_in_cache and claim_item_in_cache[report_key]:
-                # Check if this report is selected
-                report_id = f"claim-{claim_idx}-question-{q_idx}"
-                if not selected_reports or report_id in selected_reports:
+        # Parse report ID format: "claim-{idx}-summary" or "claim-{idx}-question-{q_idx}"
+        if report_id.endswith('-summary'):
+            # This is a model verdict + external verification summary
+            try:
+                claim_idx = int(report_id.split('-')[1])
+                claim_data = claims_data_in_cache[claim_idx]
+
+                pdf_reports.append({
+                    "id": report_id,
+                    "claim_text": claim_data.get('text', f"Claim {claim_idx + 1}"),
+                    "model_verdict": claim_data.get('model_verdict', ''),
+                    "external_verdict": claim_data.get('external_verdict', 'Not verified externally.'),
+                    "sources": claim_data.get('sources', []),
+                    "question": "Model verdict + external verification",
+                    "report": None
+                })
+                added_ids.add(report_id)
+            except (IndexError, ValueError) as e:
+                logging.warning(f"Invalid summary report ID format: {report_id}")
+                continue
+
+        elif 'question' in report_id:
+            # This is a question report: "claim-{idx}-question-{q_idx}"
+            try:
+                parts = report_id.split('-')
+                claim_idx = int(parts[1])
+                q_idx = int(parts[3])
+                claim_data = claims_data_in_cache[claim_idx]
+
+                report_key = f"q{q_idx}_report"
+                if report_key in claim_data and claim_data[report_key]:
                     pdf_reports.append({
-                        "claim_text": claim_item_in_cache['text'],
-                        "model_verdict": normalize_text(claim_item_in_cache['model_verdict']),
-                        "external_verdict": normalize_text(claim_item_in_cache.get('external_verdict', 'Not verified externally.')),
-                        "sources": claim_item_in_cache.get('sources', []),
-                        "question": normalize_text(question),
-                        "report": normalize_text(claim_item_in_cache[report_key])
+                        "id": report_id,
+                        "claim_text": claim_data.get('text', f"Claim {claim_idx + 1}"),
+                        "model_verdict": claim_data.get('model_verdict', ''),
+                        "external_verdict": claim_data.get('external_verdict', 'Not verified externally.'),
+                        "sources": claim_data.get('sources', []),
+                        "question": claim_data.get('questions', [''])[q_idx],
+                        "report": claim_data[report_key]
                     })
+                    added_ids.add(report_id)
+            except (IndexError, ValueError) as e:
+                logging.warning(f"Invalid question report ID format: {report_id}")
+                continue
 
     if not pdf_reports:
-        return "No complete reports to export. Generate reports for at least one question first by clicking 'Generate Report'.", 400
+        return "No valid reports selected for export.", 400
 
+    # Continue with the existing PDF generation code...
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
+
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle(name='ClaimHeading', parent=styles['h2'], fontName='Helvetica-Bold', fontSize=14, spaceAfter=6))
     styles.add(ParagraphStyle(name='SectionHeading', parent=styles['h3'], fontName='Helvetica-Bold', fontSize=12, spaceAfter=4, textColor=colors.darkblue))
@@ -1110,27 +1214,40 @@ def export_pdf():
             p.showPage()
             y = height - inch
         y -= 20
-        y = draw_paragraph(p, f"Claim: {item['claim_text']}", styles['ClaimHeading'], y, width)
-        y = draw_paragraph(p, f"<b>Model Verdict:</b> {item['model_verdict']}", styles['NormalParagraph'], y, width)
-        y = draw_paragraph(p, f"<b>External Verdict:</b> {item['external_verdict']}", styles['NormalParagraph'], y, width)
 
-        if item['sources']:
+        # Claim heading
+        y = draw_paragraph(p, f"Claim: {item['claim_text']}", styles['ClaimHeading'], y, width)
+
+        # Model verdict
+        y = draw_paragraph(p, f"<b>Model Verdict:</b> {item.get('model_verdict','')}", styles['NormalParagraph'], y, width)
+
+        # External verdict
+        y = draw_paragraph(p, f"<b>External Verdict:</b> {item.get('external_verdict','')}", styles['NormalParagraph'], y, width)
+
+        # Sources (if any)
+        if item.get('sources'):
             y = draw_paragraph(p, "<b>External Sources:</b>", styles['SectionHeading'], y, width)
-            for src in item['sources']:
-                link_text = f"{src['title']}"
-                if src['url']:
+            for src in item.get('sources', []):
+                link_text = f"{src.get('title','')}"
+                if src.get('url'):
                     escaped_url = src['url'].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
                     link_text = f'<link href="{escaped_url}">{link_text}</link>'
                 y = draw_paragraph(p, f"- {link_text}", styles['SourceLink'], y, width)
 
-        y = draw_paragraph(p, f"<b>Research Question:</b> {item['question']}", styles['SectionHeading'], y, width)
+        # Question heading
+        y = draw_paragraph(p, f"<b>Research Question:</b> {item.get('question','')}", styles['SectionHeading'], y, width)
 
+        # Full report if present
         if item.get('report'):
             y = draw_paragraph(p, "<b>AI Research Report:</b>", styles['SectionHeading'], y, width)
-            report_content_formatted = item['report']
+
+            report_content_formatted = normalize_text_for_pdf(item['report'])
+            report_content_formatted = convert_markdown_tables_to_simple_text(report_content_formatted)
             report_content_formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', report_content_formatted)
             report_content_formatted = re.sub(r'\[(.*?)\]\((https?://[^\s\]]+)\)', r'<link href="\2">\1</link>', report_content_formatted)
+
             y = draw_paragraph(p, report_content_formatted, styles['ReportBody'], y, width)
+
         y -= 20
 
     p.save()
@@ -1139,15 +1256,20 @@ def export_pdf():
 
 def draw_paragraph(pdf_canvas, text_content, style, y_pos, page_width, left_margin=0.75*inch, right_margin=0.75*inch):
     available_width = page_width - left_margin - right_margin
-    # Normalize text for PDF rendering
-    text_content = normalize_text(text_content)
+
+    # NORMALIZE TEXT CONTENT FIRST
+    text_content = normalize_text_for_pdf(text_content)
+
     # Replace markdown newlines with HTML <br/> for ReportLab Paragraph
     text_content = text_content.replace('\n', '<br/>')
+
     para = Paragraph(text_content, style)
     w, h = para.wrapOn(pdf_canvas, available_width, 0)
+
     if y_pos - h < 0.75*inch:
         pdf_canvas.showPage()
         y_pos = A4[1] - 0.75*inch
+
     para.drawOn(pdf_canvas, left_margin, y_pos - h)
     return y_pos - h - style.spaceAfter
 
