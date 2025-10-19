@@ -387,7 +387,7 @@ def analyze_image_with_ocr(image_path):
         return ""
 
 def transcribe_video(video_path):
-    """Transcribe video using OpenAI Whisper API."""
+    """Transcribe uploaded video using free whisper-api.com"""
     try:
         # Extract audio from video
         audio_path = video_path + ".mp3"
@@ -395,26 +395,41 @@ def transcribe_video(video_path):
         video_clip.audio.write_audiofile(audio_path)
         video_clip.close()
 
-        # Transcribe audio using Whisper
+        # Use free whisper-api.com
         with open(audio_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",  # Use 'whisper-1' for best results; it's multilingual
-                file=audio_file,
-                response_format="text"  # Can change to 'verbose_json' for timestamps
+            files = {"file": audio_file}
+            response = requests.post(
+                "https://whisper-api.com/api/v1/transcribe",
+                files=files,
+                timeout=120  # Longer timeout for large files
             )
+        
+        if response.status_code == 200:
+            result = response.json()
+            transcription = result.get("text", "")
+            if not transcription:
+                raise ValueError("No transcription returned from whisper-api.com")
+        else:
+            raise ValueError(f"Whisper API error: {response.status_code} - {response.text}")
 
         # Clean up audio file
         os.remove(audio_path)
-        logging.info(f"Video transcribed successfully: {video_path}")
-        return transcript
+        logging.info(f"Video transcribed successfully using free API: {video_path}")
+        return transcription
+        
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Network error calling whisper-api.com: {e}")
+        raise ValueError(f"Network error: Failed to connect to transcription service")
     except Exception as e:
-        logging.error(f"Video transcription failed: {e}")
+        logging.error(f"Transcription failed: {e}")
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
         raise ValueError(f"Failed to transcribe video: {str(e)}")
 
 def transcribe_from_url(video_url):
-    """Download and transcribe video from URL using yt-dlp and Whisper."""
+    """Transcribe video URL using free whisper-api.com"""
     try:
-        # Download audio using yt-dlp (supports YouTube, Vimeo, etc.)
+        # Download audio using yt-dlp
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': '/tmp/%(id)s.%(ext)s',
@@ -423,26 +438,41 @@ def transcribe_from_url(video_url):
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'quiet': True  # Suppress console output
+            'quiet': True
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
-            audio_path = ydl.prepare_filename(info).rsplit('.', 1)[0] + '.mp3'  # Get MP3 path
+            audio_path = ydl.prepare_filename(info).rsplit('.', 1)[0] + '.mp3'
 
-        # Transcribe audio using Whisper
+        # Use free whisper-api.com
         with open(audio_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                response_format="text"
+            files = {"file": audio_file}
+            response = requests.post(
+                "https://whisper-api.com/api/v1/transcribe",
+                files=files,
+                timeout=120
             )
+        
+        if response.status_code == 200:
+            result = response.json()
+            transcription = result.get("text", "")
+            if not transcription:
+                raise ValueError("No transcription returned from whisper-api.com")
+        else:
+            raise ValueError(f"Whisper API error: {response.status_code} - {response.text}")
 
         # Clean up audio file
         os.remove(audio_path)
-        logging.info(f"Video URL transcribed successfully: {video_url}")
-        return transcript
+        logging.info(f"Video URL transcribed successfully using free API: {video_url}")
+        return transcription
+        
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Network error calling whisper-api.com: {e}")
+        raise ValueError(f"Network error: Failed to connect to transcription service")
     except Exception as e:
-        logging.error(f"Video URL transcription failed: {e}")
+        logging.error(f"URL transcription failed: {e}")
+        if 'audio_path' in locals() and os.path.exists(audio_path):
+            os.remove(audio_path)
         raise ValueError(f"Failed to transcribe video URL: {str(e)}")
 
 def save_uploaded_file(file, upload_folder="/home/scicheckagent/mysite/uploads"):
