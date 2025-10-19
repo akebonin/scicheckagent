@@ -387,7 +387,7 @@ def analyze_image_with_ocr(image_path):
         return ""
 
 def transcribe_video(video_path):
-    """Transcribe video using OpenAI Whisper API."""
+    """Transcribe video using free whisper-api.com."""
     try:
         # Extract audio from video
         audio_path = video_path + ".mp3"
@@ -396,12 +396,14 @@ def transcribe_video(video_path):
         video_clip.close()
 
         # Transcribe audio using Whisper
+        # Use free whisper-api.com instead of OpenAI
         with open(audio_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",  # Use 'whisper-1' for best results; it's multilingual
-                file=audio_file,
-                response_format="text"  # Can change to 'verbose_json' for timestamps
-            )
+            files = {"file": audio_file}
+            response = requests.post(
+                "https://whisper-api.com/api/v1/transcribe",
+                files=files,
+                timeout=60
+        )
 
         # Clean up audio file
         os.remove(audio_path)
@@ -412,7 +414,7 @@ def transcribe_video(video_path):
         raise ValueError(f"Failed to transcribe video: {str(e)}")
 
 def transcribe_from_url(video_url):
-    """Download and transcribe video from URL using yt-dlp and Whisper."""
+    """Download and transcribe video from URL using yt-dlp and whisper-api.com."""
     try:
         # Download audio using yt-dlp (supports YouTube, Vimeo, etc.)
         ydl_opts = {
@@ -430,11 +432,13 @@ def transcribe_from_url(video_url):
             audio_path = ydl.prepare_filename(info).rsplit('.', 1)[0] + '.mp3'  # Get MP3 path
 
         # Transcribe audio using Whisper
+        # Use free whisper-api.com instead of OpenAI
         with open(audio_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                response_format="text"
+            files = {"file": audio_file}
+            response = requests.post(
+                "https://whisper-api.com/api/v1/transcribe",
+                files=files,
+                timeout=60
             )
 
         # Clean up audio file
