@@ -94,6 +94,10 @@ init_db()
 # API Configuration
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+WHISPER_API_KEY = os.getenv("WHISPER_API_KEY")
+if not WHISPER_API_KEY:
+    logging.error("WHISPER_API_KEY not set.")
+    raise ValueError("WHISPER_API_KEY is not set in environment variables.")
 
 # Base prompt templates for consolidation
 BASE_EXTRACTION_RULES = '''
