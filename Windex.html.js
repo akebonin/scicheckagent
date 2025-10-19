@@ -10,9 +10,11 @@
     <script type="text/javascript" src="//cdn.iubenda.com/cs/tcf/safe-tcf-v2.js"></script>
     <script type="text/javascript" src="//cdn.iubenda.com/cs/gpp/stub.js"></script>
     <script type="text/javascript" src="//cdn.iubenda.com/cs/iubenda_cs.js" charset="UTF-8" async></script>
+
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SciCheck AI Agent</title>
+
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-H5SNSXX9K0"></script>
     <script>
         window.dataLayer = window.dataLayer || [];
@@ -20,35 +22,43 @@
         gtag('js', new Date());
         gtag('config', 'G-H5SNSXX9K0');
     </script>
+
     <link rel="manifest" href="/static/manifest.json">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
     <style>
         body {
             background-color: #f8f9fa;
             color: #212529;
             font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
         }
+
         .container {
             max-width: 900px;
             padding-top: 20px;
             padding-bottom: 50px;
         }
+
         .header {
             text-align: center;
             margin: 40px 0;
             color: #0d6efd;
         }
+
         .header img {
             width: 60px;
             height: 60px;
             margin-right: 15px;
             vertical-align: middle;
         }
+
         .header h2 {
             display: inline;
             vertical-align: middle;
             font-weight: 700;
         }
+
         .control-card, .claim-card {
             background-color: #ffffff;
             padding: 2.5rem;
@@ -57,20 +67,24 @@
             box-shadow: 0 6px 20px rgba(0,0,0,0.08);
             border: 1px solid #e0e0e0;
         }
+
         .form-label {
             font-weight: 600;
             color: #343a40;
             margin-bottom: 8px;
         }
+
         .form-control, .form-select {
             border-radius: 8px;
             padding: 0.75rem 1rem;
             border: 1px solid #ced4da;
         }
+
         .form-control:focus, .form-select:focus {
             border-color: #86b7fe;
             box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
         }
+
         .btn-primary {
             background-color: #0d6efd;
             border-color: #0d6efd;
@@ -79,10 +93,12 @@
             border-radius: 8px;
             transition: background-color 0.2s, border-color 0.2s;
         }
+
         .btn-primary:hover {
             background-color: #0b5ed7;
             border-color: #0a58ca;
         }
+
         .btn-secondary {
             background-color: #6c757d;
             border-color: #6c757d;
@@ -90,10 +106,12 @@
             font-weight: 500;
             border-radius: 8px;
         }
+
         .btn-secondary:hover {
             background-color: #5c636a;
             border-color: #565e64;
         }
+
         .btn-success {
             background-color: #28a745;
             border-color: #28a745;
@@ -102,29 +120,35 @@
             border-radius: 8px;
             transition: background-color 0.2s, border-color 0.2s;
         }
+
         .btn-success:hover {
             background-color: #218838;
             border-color: #1e7e34;
         }
+
         .btn-info {
             background-color: #0dcaf0;
             border-color: #0dcaf0;
         }
+
         .spinner-border {
             width: 1.2rem;
             height: 1.2rem;
             margin-right: 8px;
         }
+
         .claim-card h5 {
             font-weight: 700;
             color: #0d6efd;
             margin-bottom: 1rem;
             font-size: 1.5rem;
         }
+
         .claim-card p {
             font-size: 1.05rem;
             line-height: 1.6;
         }
+
         .verdict-box, .report-box {
             background-color: #e9ecef;
             padding: 18px;
@@ -137,15 +161,18 @@
             color: #343a40;
             overflow-wrap: break-word;
         }
+
         .report-box {
             background-color: #e8f5ff;
             border-color: #cce7ff;
             margin-top: 15px;
         }
+
         .report-placeholder {
             min-height: 50px;
             padding-left: 15px;
         }
+
         .question-list li {
             background-color: #f8f9fa;
             border-color: #e9ecef;
@@ -158,6 +185,7 @@
             justify-content: space-between;
             flex-wrap: wrap;
         }
+
         .question-list li span {
             flex-grow: 1;
             margin-right: 15px;
@@ -166,22 +194,27 @@
             margin-bottom: 10px;
             width: 100%;
         }
+
         .question-list li button {
             flex-shrink: 0;
             margin-top: 5px;
         }
+
         .source-list li {
             word-break: break-all;
             margin-bottom: 5px;
             font-size: 0.9rem;
         }
+
         .source-list a {
             color: #0d6efd;
             text-decoration: none;
         }
+
         .source-list a:hover {
             text-decoration: underline;
         }
+
         .footer {
             margin-top: 5rem;
             padding: 2rem 0;
@@ -189,19 +222,23 @@
             font-size: 0.9rem;
             color: #6c757d;
         }
+
         .alert-danger {
             background-color: #f8d7da;
             color: #721c24;
             border-color: #f5c6cb;
         }
+
         .alert-info {
             background-color: #d1ecf1;
             color: #0c5460;
             border-color: #bee5eb;
         }
+
         .d-grid button {
             height: 55px;
         }
+
         .form-check-input.form-switch {
             width: 3em;
             height: 1.5em;
@@ -212,20 +249,25 @@
             border-radius: 1.5em;
             transition: background-position .15s ease-in-out;
         }
+
         .form-check-input.form-switch:checked {
             background-position: right center;
             background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='-4 -4 8 8'%3e%3ccircle r='3' fill='%23fff'/%3e%3c/svg%3e");
         }
+
         .form-check-input.form-switch:focus {
             box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
         }
+
         .form-check-label {
             vertical-align: middle;
             margin-left: 0.5rem;
         }
+
         .report-checkbox {
             margin-right: 8px;
         }
+
         .pdf-selection-section {
             background-color: #e8f5e8;
             padding: 1.5rem;
@@ -233,11 +275,13 @@
             margin-bottom: 20px;
             border: 1px solid #c3e6c3;
         }
+
         .pdf-selection-list {
             max-height: 300px;
             overflow-y: auto;
             margin-top: 15px;
         }
+
         .file-upload-group {
             border: 2px dashed #dee2e6;
             border-radius: 8px;
@@ -246,30 +290,65 @@
             background-color: #f8f9fa;
             transition: all 0.3s ease;
         }
+
         .file-upload-group:hover {
             border-color: #0d6efd;
             background-color: #e7f1ff;
         }
+
         .file-upload-group.dragover {
             border-color: #0d6efd;
             background-color: #d4e6ff;
         }
+
         .upload-icon {
             font-size: 3rem;
             color: #6c757d;
             margin-bottom: 1rem;
         }
+
         .file-input-hidden {
             display: none;
         }
+
         .preview-image {
             max-width: 100%;
             max-height: 200px;
             margin-top: 1rem;
             border-radius: 8px;
         }
+
+        .table {
+            width: 100%;
+            margin: 10px 0;
+        }
+
+        .table-bordered {
+            border: 1px solid #dee2e6;
+        }
+
+        .table-sm {
+            font-size: 0.9rem;
+        }
+
+        /* Modal styles for report selection */
+        .report-selection-list {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+        }
+        .report-selection-item {
+            padding: 10px;
+            border-bottom: 1px solid #f8f9fa;
+        }
+        .report-selection-item:last-child {
+            border-bottom: none;
+        }
     </style>
 </head>
+
 <body>
     <div class="container">
         <header class="header">
@@ -377,27 +456,45 @@
 
         <div id="results-container"></div>
 
-        <div id="pdf-download-section" class="text-center mt-5 d-none">
-            <div class="pdf-selection-section">
-                <h5>📋 PDF Export Selection</h5>
-                <p class="text-muted">Select which reports to include in the PDF download:</p>
-                <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="select-all-reports" checked>
-                    <label class="form-check-label" for="select-all-reports">
-                        Select All Reports
-                    </label>
-                </div>
-                <div id="pdf-selection-list" class="pdf-selection-list"></div>
-            </div>
+        <!-- Always visible download button -->
+        <div id="pdf-download-section" class="text-center mt-5">
             <button id="download-pdf-btn" class="btn btn-success btn-lg">
                 <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
-                Download Selected Reports (PDF)
+                Download Analysis Report (PDF)
             </button>
         </div>
 
         <footer class="text-center text-muted footer">
             Built by <a href="https://alizgravenil.wixsite.com/alisgravenil" target="_blank" rel="noopener noreferrer">Alis Grave Nil</a>
         </footer>
+    </div>
+
+    <!-- Report Selection Modal -->
+    <div class="modal fade" id="reportSelectionModal" tabindex="-1" aria-labelledby="reportSelectionModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="reportSelectionModalLabel">Select Reports for PDF</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <button id="select-all-reports-modal" class="btn btn-outline-primary btn-sm">Select All</button>
+                        <button id="deselect-all-reports-modal" class="btn btn-outline-secondary btn-sm">Deselect All</button>
+                    </div>
+                    <div id="report-selection-list" class="report-selection-list">
+                        <!-- Dynamic content will be inserted here -->
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button id="generate-pdf-from-modal" class="btn btn-success">
+                        <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                        Generate PDF
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -408,28 +505,22 @@
             const imageInputGroup = document.getElementById('image-input-group');
             const videoInputGroup = document.getElementById('video-input-group');
             const videoUrlInputGroup = document.getElementById('video-url-input-group');
-
             const textInput = document.getElementById('textInput');
             const urlInput = document.getElementById('urlInput');
             const imageInput = document.getElementById('imageInput');
             const videoInput = document.getElementById('videoInput');
             const videoUrlInput = document.getElementById('videoUrlInput');
-
             const fetchArticleBtn = document.getElementById('fetch-article-btn');
             const processImageBtn = document.getElementById('process-image-btn');
             const processVideoBtn = document.getElementById('process-video-btn');
             const transcribeVideoUrlBtn = document.getElementById('transcribe-video-url-btn');
-
             const analysisForm = document.getElementById('analysis-form');
             const runAnalysisBtn = document.getElementById('run-analysis-btn');
             const resultsContainer = document.getElementById('results-container');
             const pdfDownloadSection = document.getElementById('pdf-download-section');
-            const pdfSelectionList = document.getElementById('pdf-selection-list');
-            const selectAllCheckbox = document.getElementById('select-all-reports');
             const downloadPdfBtn = document.getElementById('download-pdf-btn');
             const promptModeSelect = document.getElementById('promptMode');
             const usePapersToggle = document.getElementById('usePapersToggle');
-
             const imageUploadArea = document.getElementById('image-upload-area');
             const videoUploadArea = document.getElementById('video-upload-area');
             const imagePreview = document.getElementById('image-preview');
@@ -442,6 +533,7 @@
             function toggleLoading(button, isLoading, loadingText = '', progress = '') {
                 const spinner = button.querySelector('.spinner-border');
                 const originalText = button.dataset.originalText || button.textContent.trim();
+
                 if (!button.dataset.originalText) {
                     button.dataset.originalText = originalText;
                 }
@@ -457,7 +549,7 @@
                     button.disabled = false;
                     if(spinner) spinner.classList.add('d-none');
                     const textNode = Array.from(button.childNodes).find(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim().length > 0);
-                     if(textNode) textNode.textContent = ` ${originalText}`;
+                    if(textNode) textNode.textContent = ` ${originalText}`;
                 }
             }
 
@@ -474,16 +566,79 @@
                 });
             }
 
+            function convertMarkdownTablesToHTML(text) {
+                // Match markdown tables - they start with |, have a header, separator line, and data rows
+                const tableRegex = /(\|.*\|\s*\n\|[-:\s|]+\|\s*\n(?:\|.*\|\s*\n)*)/g;
+
+                return text.replace(tableRegex, (tableMatch) => {
+                    const lines = tableMatch.trim().split('\n').filter(line => line.trim().startsWith('|'));
+
+                    if (lines.length < 2) return tableMatch; // Not a valid table
+
+                    let htmlTable = '<table class="table table-bordered table-sm mt-2 mb-3" style="font-size: 0.9rem;">';
+
+                    lines.forEach((line, index) => {
+                        const cells = line.split('|').slice(1, -1).map(cell => cell.trim());
+
+                        if (index === 0) {
+                            // Header row
+                            htmlTable += '<thead><tr>';
+                            cells.forEach(cell => {
+                                htmlTable += `<th style="padding: 4px 8px; border: 1px solid #dee2e6;">${cell}</th>`;
+                            });
+                            htmlTable += '</tr></thead><tbody>';
+                        } else if (index === 1 && cells.every(cell => cell.replace(/[-:\s]/g, '') === '')) {
+                            // Separator line - skip it
+                            return;
+                        } else {
+                            // Data row
+                            htmlTable += '<tr>';
+                            cells.forEach(cell => {
+                                // Check if this might be a header row (if first row was actually separator)
+                                const isHeader = index === 1 && lines[0].replace(/[-:\s|]/g, '') === '';
+                                if (isHeader) {
+                                    htmlTable += `<th style="padding: 4px 8px; border: 1px solid #dee2e6;">${cell}</th>`;
+                                } else {
+                                    htmlTable += `<td style="padding: 4px 8px; border: 1px solid #dee2e6;">${cell}</td>`;
+                                }
+                            });
+                            htmlTable += '</tr>';
+                        }
+                    });
+
+                    htmlTable += '</tbody></table>';
+                    return htmlTable;
+                });
+            }
+
             function formatTextWithMarkdownAndLinks(text) {
-                let formattedText = escapeHTML(text);
-                // Bold: **text**
+                // First normalize Unicode characters
+                let normalizedText = text.normalize('NFKD');
+
+                // Replace common problematic characters
+                normalizedText = normalizedText.replace(/[–—]/g, '-'); // en-dash and em-dash to hyphen
+                normalizedText = normalizedText.replace(/[ââ]/g, '-'); // encoded dashes
+                normalizedText = normalizedText.replace(/[â]/g, "'"); // right single quote
+                normalizedText = normalizedText.replace(/[ââ]/g, '"'); // quotes
+                normalizedText = normalizedText.replace(/[¯]/g, ' '); // macron to space
+                normalizedText = normalizedText.replace(/[­]/g, ''); // soft hyphen removal
+
+                // Replace Greek letters with their text equivalents
+                normalizedText = normalizedText.replace(/Î²/g, 'beta');
+                normalizedText = normalizedText.replace(/Î±/g, 'alpha');
+                normalizedText = normalizedText.replace(/Î³/g, 'gamma');
+
+                let formattedText = escapeHTML(normalizedText);
+
+                // PROCESS TABLES BEFORE OTHER MARKDOWN
+                formattedText = convertMarkdownTablesToHTML(formattedText);
+
+                // Rest of your existing markdown processing...
                 formattedText = formattedText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-                // Links: [text](url)
                 formattedText = formattedText.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-                // Autolink URLs
                 formattedText = formattedText.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
-                // Newlines
                 formattedText = formattedText.replace(/\n/g, '<br>');
+
                 return formattedText;
             }
 
@@ -571,7 +726,6 @@
                 }
 
                 toggleLoading(processImageBtn, true, 'Processing image...');
-
                 const formData = new FormData();
                 formData.append('image', currentImageFile);
 
@@ -590,9 +744,7 @@
                     textInput.value = data.extracted_text;
                     inputMethodSelect.value = 'paste';
                     inputMethodSelect.dispatchEvent(new Event('change'));
-
                     alert('Text successfully extracted from image! Ready for analysis.');
-
                 } catch (error) {
                     alert(`Error processing image: ${error.message}`);
                 } finally {
@@ -607,7 +759,6 @@
                 }
 
                 toggleLoading(processVideoBtn, true, 'Processing video...');
-
                 const formData = new FormData();
                 formData.append('video', currentVideoFile);
 
@@ -625,9 +776,7 @@
                     textInput.value = data.transcription;
                     inputMethodSelect.value = 'paste';
                     inputMethodSelect.dispatchEvent(new Event('change'));
-
                     alert(`Video processing note: ${data.note}`);
-
                 } catch (error) {
                     alert(`Error processing video: ${error.message}`);
                 } finally {
@@ -664,9 +813,7 @@
                     textInput.value = data.transcription;
                     inputMethodSelect.value = 'paste';
                     inputMethodSelect.dispatchEvent(new Event('change'));
-
                     alert(`Video URL transcription note: ${data.note}`);
-
                 } catch (error) {
                     alert(`Error transcribing video URL: ${error.message}`);
                 } finally {
@@ -678,29 +825,26 @@
                 claims.forEach((claimText, index) => {
                     const claimId = `claim-${index}`;
                     const claimHtml = `
-                    <div class="claim-card" id="${claimId}">
-                        <h5>Claim ${index + 1}</h5>
-                        <p class="claim-text mb-3">${escapeHTML(claimText)}</p>
-
-                        <strong>Model Verdict:</strong>
-                        <div id="model-verdict-${claimId}" class="verdict-box model-verdict-box mb-3" style="min-height: 50px;">
-                            <span class="text-muted">Loading model verdict...</span>
+                        <div class="claim-card" id="${claimId}">
+                            <h5>Claim ${index + 1}</h5>
+                            <p class="claim-text mb-3">${escapeHTML(claimText)}</p>
+                            <strong>Model Verdict:</strong>
+                            <div id="model-verdict-${claimId}" class="verdict-box model-verdict-box mb-3" style="min-height: 50px;">
+                                <span class="text-muted">Loading model verdict...</span>
+                            </div>
+                            <strong>Suggested Research Questions:</strong>
+                            <ul id="questions-list-${claimId}" class="question-list list-group list-group-flush mb-3">
+                                <li class="list-group-item">
+                                    <span class="text-muted">Loading questions...</span>
+                                </li>
+                            </ul>
+                            <hr>
+                            <strong>External Verification (CrossRef, CORE & PubMed):</strong>
+                            <div id="external-verdict-${claimId}" class="verdict-box mb-2" style="min-height: 50px;">
+                                ${usePapersToggle.checked ? '<span class="text-muted">Loading external verification...</span>' : 'External verification is toggled off.'}
+                            </div>
+                            <ul id="external-sources-${claimId}" class="source-list list-unstyled ps-3 mb-3"></ul>
                         </div>
-
-                        <strong>Suggested Research Questions:</strong>
-                        <ul id="questions-list-${claimId}" class="question-list list-group list-group-flush mb-3">
-                            <li class="list-group-item">
-                                <span class="text-muted">Loading questions...</span>
-                            </li>
-                        </ul>
-
-                        <hr>
-                        <strong>External Verification (CrossRef, CORE & PubMed):</strong>
-                        <div id="external-verdict-${claimId}" class="verdict-box mb-2" style="min-height: 50px;">
-                            ${usePapersToggle.checked ? '<span class="text-muted">Loading external verification...</span>' : 'External verification is toggled off.'}
-                        </div>
-                        <ul id="external-sources-${claimId}" class="source-list list-unstyled ps-3 mb-3"></ul>
-                    </div>
                     `;
                     resultsContainer.innerHTML += claimHtml;
                 });
@@ -731,12 +875,11 @@
                 });
 
                 for (let i = 0; i < claims.length; i++) {
-                     toggleLoading(runAnalysisBtn, true, 'Analyzing', `Claim ${i + 1} of ${claims.length}`);
-                     await promises[i];
+                    toggleLoading(runAnalysisBtn, true, 'Analyzing', `Claim ${i + 1} of ${claims.length}`);
+                    await promises[i];
                 }
 
                 toggleLoading(runAnalysisBtn, false);
-                updatePdfSelectionList();
             }
 
             async function getModelDetails(claimIdx, verdictContainerId, questionsContainerId, button, autoLoad = false) {
@@ -755,16 +898,16 @@
                     });
 
                     if (!response.ok) {
-                         const errorData = await response.text(); // Get raw text to see if it's HTML
-                         throw new Error(errorData || `Failed to get claim details: ${response.status}`);
+                        const errorData = await response.text(); // Get raw text to see if it's HTML
+                        throw new Error(errorData || `Failed to get claim details: ${response.status}`);
                     }
+
                     const data = await response.json();
-
-
                     const formattedVerdict = formatTextWithMarkdownAndLinks(data.model_verdict);
-                    verdictContainer.innerHTML = formattedVerdict;
 
+                    verdictContainer.innerHTML = formattedVerdict;
                     questionsList.innerHTML = '';
+
                     if (data.questions && data.questions.length > 0) {
                         data.questions.forEach((q, q_idx) => {
                             const listItem = document.createElement('li');
@@ -772,9 +915,9 @@
                             listItem.innerHTML = `
                                 <span class="d-block mb-2"><b>Q${q_idx + 1}:</b> ${escapeHTML(q)}</span>
                                 <button class="btn btn-primary btn-sm generate-report-btn"
-                                        data-claim-idx="${claimIdx}"
-                                        data-question-idx="${q_idx}"
-                                        data-report-container-id="report-claim-${claimIdx}-${q_idx}">
+                                    data-claim-idx="${claimIdx}"
+                                    data-question-idx="${q_idx}"
+                                    data-report-container-id="report-claim-${claimIdx}-${q_idx}">
                                     Generate Report
                                 </button>
                                 <div id="report-claim-${claimIdx}-${q_idx}" class="report-placeholder mt-2 w-100"></div>
@@ -795,7 +938,6 @@
                     } else {
                         questionsList.innerHTML = '<li class="list-group-item">No research questions generated.</li>';
                     }
-
                 } catch (error) {
                     verdictContainer.innerHTML = `<div class="alert alert-danger p-2 mt-2">Error: ${error.message}</div>`;
                     questionsList.innerHTML = `<li class="list-group-item text-danger">Could not load questions: ${error.message}</li>`;
@@ -824,12 +966,11 @@
                         body: JSON.stringify({ claim_idx: claimIdx })
                     });
 
+                    const data = await response.json();
                     if (!response.ok) {
-                        const errorData = await response.text();
-                        throw new Error(errorData || `External verification failed: ${response.status}`);
+                        throw new Error(data.error || 'External verification failed: ${response.status}');
                     }
 
-                    const data = await response.json();
                     verdictContainer.innerHTML = formatTextWithMarkdownAndLinks(data.verdict);
 
                     if (data.sources && data.sources.length > 0) {
@@ -839,7 +980,6 @@
                     } else {
                         sourcesContainer.innerHTML = `<li>No external sources found.</li>`;
                     }
-
                 } catch (error) {
                     verdictContainer.innerHTML = `<div class="alert alert-warning p-2 mt-2">Error: ${error.message}</div>`;
                     sourcesContainer.innerHTML = `<li>Could not fetch sources.</li>`;
@@ -856,6 +996,7 @@
 
                 if (button) {
                     button.disabled = true;
+                    button.innerHTML = 'Generating...';
                 }
 
                 try {
@@ -866,120 +1007,211 @@
                     });
 
                     if (!response.ok) {
-                        const errorData = await response.json();
-                        throw new Error(errorData.error || `Failed to start report generation: ${response.status}`);
+                        let errText;
+                        try { errText = await response.json(); errText = errText.error || JSON.stringify(errText); } catch(e){ errText = await response.text(); }
+                        throw new Error(errText || `Failed to start report generation: ${response.status}`);
                     }
 
                     reportContainer.innerHTML = '<div class="report-box"></div>';
                     const reportBox = reportContainer.querySelector('.report-box');
-
                     const reader = response.body.getReader();
                     const decoder = new TextDecoder();
+                    let fullContent = '';
+                    let sawAnyChunk = false;
 
                     while (true) {
                         const { value, done } = await reader.read();
                         if (done) break;
+                        sawAnyChunk = true;
 
                         const chunk = decoder.decode(value, { stream: true });
-                        const lines = chunk.split('\n\n');
+                        const parts = chunk.split(/\n\n/);
+                        for (const part of parts) {
+                            const line = part.trim();
+                            if (!line) continue;
 
-                        for (const line of lines) {
                             if (line.startsWith('data: ')) {
                                 const dataPart = line.substring(6).trim();
-                                if (dataPart === '[DONE]') break;
-
+                                if (dataPart === '[DONE]') {
+                                    reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
+                                    break;
+                                }
                                 try {
                                     const jsonData = JSON.parse(dataPart);
                                     if (jsonData.content) {
-                                        reportBox.innerHTML += jsonData.content.replace(/\n/g, '<br>');
+                                        fullContent += jsonData.content;
+                                        reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
                                     }
                                     if (jsonData.error) {
                                         reportBox.innerHTML += `<br><strong class="text-danger">Error: ${escapeHTML(jsonData.error)}</strong>`;
-                                        return;
                                     }
                                 } catch (e) {
-                                    console.warn("Error parsing SSE chunk or non-JSON data:", e, "Chunk:", dataPart);
+                                    fullContent += dataPart;
+                                    reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
+                                }
+                            } else {
+                                try {
+                                    const jsonData = JSON.parse(line);
+                                    if (jsonData.content) {
+                                        fullContent += jsonData.content;
+                                        reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
+                                    }
+                                    if (jsonData.error) {
+                                        reportBox.innerHTML += `<br><strong class="text-danger">Error: ${escapeHTML(jsonData.error)}</strong>`;
+                                    }
+                                } catch (e) {
+                                    fullContent += line;
+                                    reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
                                 }
                             }
                         }
                     }
 
-                    // Re-format the entire report at the end to correctly apply markdown
-                    reportBox.innerHTML = formatTextWithMarkdownAndLinks(reportBox.textContent);
+                    if (fullContent && fullContent.trim().length > 0) {
+                        reportBox.innerHTML = formatTextWithMarkdownAndLinks(fullContent);
 
-
-                    // Update PDF selection list when report is generated
-                    updatePdfSelectionList();
-
+                        const reportId = `claim-${claimIdx}-question-${questionIdx}`;
+                        if (!generatedReports.find(r => r.id === reportId)) {
+                            const claimElement = document.querySelector(`#claim-${claimIdx} .claim-text`);
+                            const questionElement = document.querySelector(`#questions-list-claim-${claimIdx} li:nth-child(${questionIdx + 1}) span`);
+                            generatedReports.push({
+                                id: reportId,
+                                claimIdx: claimIdx,
+                                questionIdx: questionIdx,
+                                claimText: claimElement ? claimElement.textContent : `Claim ${claimIdx + 1}`,
+                                questionText: questionElement ? questionElement.textContent.replace(`Q${questionIdx + 1}:`, '').trim() : `Question ${questionIdx + 1}`
+                            });
+                        }
+                    } else {
+                        reportBox.innerHTML = '<div class="alert alert-warning p-2">No report content returned.</div>';
+                    }
                 } catch (error) {
-                    reportContainer.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+                    console.error('Report generation error:', error);
+                    reportContainer.innerHTML = `<div class="alert alert-danger">${escapeHTML(error.message)}</div>`;
                 } finally {
                     if (button) {
                         button.disabled = false;
+                        button.innerHTML = 'Generate Report';
                     }
                 }
             }
 
-            function updatePdfSelectionList() {
-                pdfSelectionList.innerHTML = '';
+            // NEW PDF DOWNLOAD FUNCTIONS
+            async function openReportSelectionModal() {
+                try {
+                    toggleLoading(downloadPdfBtn, true, 'Loading available reports...');
 
-                const anyReportGenerated = generatedReports.some(report => {
-                    const reportId = `report-claim-${report.claimIdx}-${report.questionIdx}`;
-                    const reportContainer = document.getElementById(reportId);
-                    return reportContainer && reportContainer.querySelector('.report-box') && reportContainer.querySelector('.report-box').textContent.length > 5;
-                });
+                    const response = await fetch('/api/available-reports');
 
-                if (!anyReportGenerated) {
-                    pdfSelectionList.innerHTML = '<p class="text-muted">No reports generated yet. Generate a report to enable PDF export.</p>';
-                    pdfDownloadSection.classList.add('d-none');
+                    if (!response.ok) {
+                        throw new Error('Failed to load available reports');
+                    }
+
+                    const availableReports = await response.json();
+
+                    if (!availableReports || availableReports.length === 0) {
+                        alert('No reports available for download. Please generate some analysis first.');
+                        return;
+                    }
+
+                    populateReportSelectionModal(availableReports);
+
+                    const modal = new bootstrap.Modal(document.getElementById('reportSelectionModal'));
+                    modal.show();
+
+                } catch (error) {
+                    console.error('Error opening report selection modal:', error);
+                    alert(`Error: ${error.message}`);
+                } finally {
+                    toggleLoading(downloadPdfBtn, false);
+                }
+            }
+
+            function populateReportSelectionModal(availableReports) {
+                const selectionList = document.getElementById('report-selection-list');
+
+                if (!availableReports || availableReports.length === 0) {
+                    selectionList.innerHTML = '<p class="text-muted">No reports available for download.</p>';
                     return;
                 }
 
-                generatedReports.forEach(report => {
-                    const reportId = `report-claim-${report.claimIdx}-${report.questionIdx}`;
-                    const reportContainer = document.getElementById(reportId);
-                    if (reportContainer && reportContainer.querySelector('.report-box') && reportContainer.querySelector('.report-box').textContent.length > 5) {
-                        const div = document.createElement('div');
-                        div.className = 'form-check';
-                        div.innerHTML = `
-                            <input class="form-check-input report-selection" type="checkbox"
-                                   id="pdf-${report.id}" value="${report.id}" checked>
-                            <label class="form-check-label" for="pdf-${report.id}">
-                                <strong>Claim ${report.claimIdx + 1}:</strong> ${report.claimText.substring(0, 100)}...<br>
-                                <small class="text-muted">Q: ${report.questionText}</small>
+                let html = '';
+                availableReports.forEach((report, index) => {
+                    html += `
+                    <div class="report-selection-item">
+                        <div class="form-check">
+                            <input class="form-check-input report-selection-checkbox" type="checkbox"
+                                id="modal-report-${index}" value="${report.id}" checked>
+                            <label class="form-check-label" for="modal-report-${index}">
+                                <strong>${report.type}</strong><br>
+                                <small class="text-muted">${report.description}</small>
                             </label>
-                        `;
-                        pdfSelectionList.appendChild(div);
-                    }
+                        </div>
+                    </div>
+                    `;
                 });
 
-                pdfDownloadSection.classList.remove('d-none');
+                selectionList.innerHTML = html;
+
+                setupSelectionModalEvents();
             }
 
-            async function downloadSelectedPdf() {
-                const selectedReports = Array.from(document.querySelectorAll('.report-selection:checked'))
-                    .map(checkbox => checkbox.value);
+            function setupSelectionModalEvents() {
+                const selectAllBtn = document.getElementById('select-all-reports-modal');
+                const deselectAllBtn = document.getElementById('deselect-all-reports-modal');
+                const generatePdfBtn = document.getElementById('generate-pdf-from-modal');
 
-                if (selectedReports.length === 0) {
-                    alert('Please select at least one report to download.');
+                selectAllBtn.replaceWith(selectAllBtn.cloneNode(true));
+                deselectAllBtn.replaceWith(deselectAllBtn.cloneNode(true));
+                generatePdfBtn.replaceWith(generatePdfBtn.cloneNode(true));
+
+                const freshSelectAllBtn = document.getElementById('select-all-reports-modal');
+                const freshDeselectAllBtn = document.getElementById('deselect-all-reports-modal');
+                const freshGeneratePdfBtn = document.getElementById('generate-pdf-from-modal');
+
+                freshSelectAllBtn.addEventListener('click', () => {
+                    document.querySelectorAll('.report-selection-checkbox').forEach(checkbox => {
+                        checkbox.checked = true;
+                    });
+                });
+
+                freshDeselectAllBtn.addEventListener('click', () => {
+                    document.querySelectorAll('.report-selection-checkbox').forEach(checkbox => {
+                        checkbox.checked = false;
+                    });
+                });
+
+                freshGeneratePdfBtn.addEventListener('click', generatePdfFromSelections);
+            }
+
+            async function generatePdfFromSelections() {
+                const generatePdfBtn = document.getElementById('generate-pdf-from-modal');
+                const checkboxes = document.querySelectorAll('.report-selection-checkbox:checked');
+
+                if (checkboxes.length === 0) {
+                    alert('Please select at least one report to include in the PDF.');
                     return;
                 }
 
-                toggleLoading(downloadPdfBtn, true, 'Generating PDF...');
+                const selectedReportIds = Array.from(checkboxes).map(checkbox => checkbox.value);
 
                 try {
+                    toggleLoading(generatePdfBtn, true, 'Generating PDF...');
+
                     const response = await fetch('/export-pdf', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ selected_reports: selectedReports })
+                        body: JSON.stringify({
+                            selected_reports: selectedReportIds,
+                            summary_contents: []
+                        })
                     });
 
                     if (!response.ok) {
                         const errorText = await response.text();
-                        throw new Error(errorText || `PDF generation failed: ${response.status}`);
+                        throw new Error(errorText || 'Failed to generate PDF');
                     }
 
-                    // Create download link
                     const blob = await response.blob();
                     const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
@@ -990,10 +1222,14 @@
                     window.URL.revokeObjectURL(url);
                     document.body.removeChild(a);
 
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('reportSelectionModal'));
+                    modal.hide();
+
                 } catch (error) {
-                    alert(`Error downloading PDF: ${error.message}`);
+                    console.error('Error generating PDF:', error);
+                    alert(`Error generating PDF: ${error.message}`);
                 } finally {
-                    toggleLoading(downloadPdfBtn, false);
+                    toggleLoading(generatePdfBtn, false);
                 }
             }
 
@@ -1001,23 +1237,23 @@
             inputMethodSelect.addEventListener('change', (event) => {
                 const method = inputMethodSelect.value;
 
-                // Hide all input groups first
                 [pasteInputGroup, urlInputGroup, imageInputGroup, videoInputGroup, videoUrlInputGroup]
                     .forEach(el => el.classList.add('d-none'));
 
-                // Show selected input group
                 const groupMap = {
-                    'paste': pasteInputGroup, 'url': urlInputGroup, 'image': imageInputGroup,
-                    'video': videoInputGroup, 'video-url': videoUrlInputGroup
+                    'paste': pasteInputGroup,
+                    'url': urlInputGroup,
+                    'image': imageInputGroup,
+                    'video': videoInputGroup,
+                    'video-url': videoUrlInputGroup
                 };
+
                 if(groupMap[method]) groupMap[method].classList.remove('d-none');
             });
 
-            // Setup drag and drop
             setupFileUploadDragAndDrop(imageUploadArea, imageInput, handleImageSelect);
             setupFileUploadDragAndDrop(videoUploadArea, videoInput, handleVideoSelect);
 
-            // Process buttons
             processImageBtn.addEventListener('click', processImage);
             processVideoBtn.addEventListener('click', processVideo);
             transcribeVideoUrlBtn.addEventListener('click', transcribeVideoUrl);
@@ -1045,7 +1281,7 @@
 
                     const data = await response.json();
                     if (!response.ok) {
-                       throw new Error(data.error || 'Failed to fetch article.');
+                        throw new Error(data.error || 'Failed to fetch article.');
                     }
 
                     if (!data.article_text || typeof data.article_text !== 'string') {
@@ -1057,7 +1293,6 @@
                     inputMethodSelect.value = 'paste';
                     inputMethodSelect.dispatchEvent(new Event('change'));
                     alert('Article content has been fetched and pasted into the text area.');
-
                 } catch (error) {
                     console.error('Fetch error:', error);
                     alert(`Error fetching article: ${error.message}`);
@@ -1069,6 +1304,7 @@
             analysisForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const articleText = textInput.value.trim();
+
                 if (!articleText) {
                     alert('Article text is empty. Please paste content or use one of the input methods.');
                     return;
@@ -1076,7 +1312,6 @@
 
                 toggleLoading(runAnalysisBtn, true, 'Analyzing...');
                 resultsContainer.innerHTML = '';
-                pdfDownloadSection.classList.add('d-none');
                 generatedReports = [];
 
                 try {
@@ -1098,26 +1333,18 @@
 
                     if (data.claims.length === 0) {
                         resultsContainer.innerHTML = '<div class="alert alert-info mt-4">No explicit claims found in the provided text.</div>';
-                        toggleLoading(runAnalysisBtn, false); // Stop loading if no claims
+                        toggleLoading(runAnalysisBtn, false);
                         return;
                     }
 
                     displayClaimsStructure(data.claims);
-
                 } catch (error) {
                     resultsContainer.innerHTML = `<div class="alert alert-danger mt-4">Error during analysis: ${error.message}</div>`;
-                    toggleLoading(runAnalysisBtn, false); // Stop loading on error
+                    toggleLoading(runAnalysisBtn, false);
                 }
             });
 
-            selectAllCheckbox.addEventListener('change', (e) => {
-                const checkboxes = document.querySelectorAll('.report-selection');
-                checkboxes.forEach(checkbox => {
-                    checkbox.checked = e.target.checked;
-                });
-            });
-
-            downloadPdfBtn.addEventListener('click', downloadSelectedPdf);
+            downloadPdfBtn.addEventListener('click', openReportSelectionModal);
 
             resultsContainer.addEventListener('click', async (e) => {
                 const targetBtn = e.target.closest('.generate-report-btn');
@@ -1128,7 +1355,6 @@
             });
         });
 
-        // Add this script to register the service worker
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/static/service-worker.js')
