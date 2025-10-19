@@ -399,7 +399,7 @@ def transcribe_video(video_path):
         with open(audio_path, "rb") as audio_file:
             files = {"file": audio_file}
             response = requests.post(
-                "https://whisper-api.com/api/v1/transcribe",
+                "https://api.whisper-api.com",
                 files=files,
                 timeout=120  # Longer timeout for large files
             )
@@ -448,7 +448,7 @@ def transcribe_from_url(video_url):
         with open(audio_path, "rb") as audio_file:
             files = {"file": audio_file}
             response = requests.post(
-                "https://whisper-api.com/api/v1/transcribe",
+                "https://api.whisper-api.com",
                 files=files,
                 timeout=120
             )
