@@ -94,10 +94,6 @@ init_db()
 # API Configuration
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    logging.error("OPENAI_API_KEY not set. Video transcription will fail.")
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Base prompt templates for consolidation
 BASE_EXTRACTION_RULES = '''
@@ -384,51 +380,80 @@ def analyze_image_with_ocr(image_path):
         return extracted_text.strip()
     except Exception as e:
         logging.error(f"OCR processing failed: {e}")
-        return ""
+        return []
 
-def transcribe_video(video_path):
-    """Transcribe uploaded video using free whisper-api.com"""
+def transcribe_video(video_path, max_retries=5, retry_delay=5):
+    """Transcribe uploaded video using Whisper API"""
     try:
+        # Load API key
+        WHISPER_API_KEY = os.getenv("WHISPER_API_KEY")
+        if not WHISPER_API_KEY:
+            logging.error("WHISPER_API_KEY not set.")
+            raise ValueError("WHISPER_API_KEY is not set in environment variables.")
+
         # Extract audio from video
         audio_path = video_path + ".mp3"
         video_clip = VideoFileClip(video_path)
         video_clip.audio.write_audiofile(audio_path)
         video_clip.close()
 
-        # Use free whisper-api.com
+        # Call Whisper API
         with open(audio_path, "rb") as audio_file:
             files = {"file": audio_file}
+            headers = {"X-API-Key": WHISPER_API_KEY}
+            data = {
+                "format": "text",  # Default format
+                "language": "en",  # Default language
+                "model_size": "base"  # Default model
+            }
             response = requests.post(
-                "https://api.whisper-api.com",
+                "https://api.whisper-api.com/transcribe",
                 files=files,
-                timeout=120  # Longer timeout for large files
+                headers=headers,
+                data=data,
+                timeout=120
             )
-        
+
         if response.status_code == 200:
             result = response.json()
-            transcription = result.get("text", "")
+            if result.get("status") == "pending":
+                # Handle asynchronous response
+                task_id = result.get("task_id")
+                if not task_id:
+                    raise ValueError("No task_id returned for pending transcription")
+                logging.info(f"Transcription pending, task_id: {task_id}")
+                return poll_transcription_status(task_id, WHISPER_API_KEY, max_retries, retry_delay)
+            transcription = result.get("result", "")
             if not transcription:
-                raise ValueError("No transcription returned from whisper-api.com")
+                logging.warning("No transcription returned from Whisper API")
+                raise ValueError("No transcription returned from Whisper API")
+            logging.info(f"Video transcribed successfully: {video_path}")
+            return transcription
         else:
+            logging.error(f"Whisper API error: {response.status_code} - {response.text}")
             raise ValueError(f"Whisper API error: {response.status_code} - {response.text}")
 
-        # Clean up audio file
-        os.remove(audio_path)
-        logging.info(f"Video transcribed successfully using free API: {video_path}")
-        return transcription
-        
     except requests.exceptions.RequestException as e:
-        logging.error(f"Network error calling whisper-api.com: {e}")
+        logging.error(f"Network error calling Whisper API: {e}")
         raise ValueError(f"Network error: Failed to connect to transcription service")
     except Exception as e:
         logging.error(f"Transcription failed: {e}")
         if os.path.exists(audio_path):
             os.remove(audio_path)
         raise ValueError(f"Failed to transcribe video: {str(e)}")
+    finally:
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
 
-def transcribe_from_url(video_url):
-    """Transcribe video URL using free whisper-api.com"""
+def transcribe_from_url(video_url, max_retries=5, retry_delay=5):
+    """Transcribe video URL using Whisper API"""
     try:
+        # Load API key
+        WHISPER_API_KEY = os.getenv("WHISPER_API_KEY")
+        if not WHISPER_API_KEY:
+            logging.error("WHISPER_API_KEY not set.")
+            raise ValueError("WHISPER_API_KEY is not set in environment variables.")
+
         # Download audio using yt-dlp
         ydl_opts = {
             'format': 'bestaudio/best',
@@ -444,36 +469,90 @@ def transcribe_from_url(video_url):
             info = ydl.extract_info(video_url, download=True)
             audio_path = ydl.prepare_filename(info).rsplit('.', 1)[0] + '.mp3'
 
-        # Use free whisper-api.com
+        # Call Whisper API
         with open(audio_path, "rb") as audio_file:
             files = {"file": audio_file}
+            headers = {"X-API-Key": WHISPER_API_KEY}
+            data = {
+                "format": "text",
+                "language": "en",
+                "model_size": "base"
+            }
             response = requests.post(
-                "https://api.whisper-api.com",
+                "https://api.whisper-api.com/transcribe",
                 files=files,
+                headers=headers,
+                data=data,
                 timeout=120
             )
-        
+
         if response.status_code == 200:
             result = response.json()
-            transcription = result.get("text", "")
+            if result.get("status") == "pending":
+                # Handle asynchronous response
+                task_id = result.get("task_id")
+                if not task_id:
+                    raise ValueError("No task_id returned for pending transcription")
+                logging.info(f"Transcription pending, task_id: {task_id}")
+                return poll_transcription_status(task_id, WHISPER_API_KEY, max_retries, retry_delay)
+            transcription = result.get("result", "")
             if not transcription:
-                raise ValueError("No transcription returned from whisper-api.com")
+                logging.warning("No transcription returned from Whisper API")
+                raise ValueError("No transcription returned from Whisper API")
+            logging.info(f"Video URL transcribed successfully: {video_url}")
+            return transcription
         else:
+            logging.error(f"Whisper API error: {response.status_code} - {response.text}")
             raise ValueError(f"Whisper API error: {response.status_code} - {response.text}")
 
-        # Clean up audio file
-        os.remove(audio_path)
-        logging.info(f"Video URL transcribed successfully using free API: {video_url}")
-        return transcription
-        
     except requests.exceptions.RequestException as e:
-        logging.error(f"Network error calling whisper-api.com: {e}")
+        logging.error(f"Network error calling Whisper API: {e}")
         raise ValueError(f"Network error: Failed to connect to transcription service")
     except Exception as e:
         logging.error(f"URL transcription failed: {e}")
         if 'audio_path' in locals() and os.path.exists(audio_path):
             os.remove(audio_path)
         raise ValueError(f"Failed to transcribe video URL: {str(e)}")
+    finally:
+        if 'audio_path' in locals() and os.path.exists(audio_path):
+            os.remove(audio_path)
+
+def poll_transcription_status(task_id, api_key, max_retries=5, retry_delay=5):
+    """Poll Whisper API for transcription status"""
+    headers = {"X-API-Key": api_key}
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(
+                f"https://api.whisper-api.com/status/{task_id}",
+                headers=headers,
+                timeout=30
+            )
+            if response.status_code == 200:
+                result = response.json()
+                status = result.get("status")
+                if status == "completed":
+                    transcription = result.get("result", "")
+                    if not transcription:
+                        logging.warning(f"No transcription returned for task_id: {task_id}")
+                        raise ValueError("No transcription returned from Whisper API")
+                    logging.info(f"Transcription completed for task_id: {task_id}")
+                    return transcription
+                elif status == "failed":
+                    error = result.get("error", "Unknown error")
+                    logging.error(f"Transcription failed for task_id: {task_id}, error: {error}")
+                    raise ValueError(f"Transcription failed: {error}")
+                else:
+                    logging.info(f"Transcription still pending for task_id: {task_id}, attempt {attempt + 1}/{max_retries}")
+                    time.sleep(retry_delay)
+            else:
+                logging.error(f"Status check failed: {response.status_code} - {response.text}")
+                raise ValueError(f"Status check failed: {response.status_code} - {response.text}")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Network error during status check for task_id: {task_id}: {e}")
+            if attempt == max_retries - 1:
+                raise ValueError(f"Network error during status check: {str(e)}")
+            time.sleep(retry_delay)
+    raise ValueError(f"Transcription did not complete within {max_retries} attempts")
 
 def save_uploaded_file(file, upload_folder="/home/scicheckagent/mysite/uploads"):
     """Save uploaded file and return path"""
