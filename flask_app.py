@@ -344,6 +344,85 @@ def fetch_core(keywords):
         logging.warning(f"CORE API call failed for query '{search_query}': {e}")
         return []
 
+def fetch_semantic_scholar(keywords, max_results=3):
+    """Fetch research papers from Semantic Scholar API"""
+    SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+    
+    if not SEMANTIC_SCHOLAR_API_KEY:
+        logging.warning("SEMANTIC_SCHOLAR_API_KEY not set")
+        return []
+    
+    # Join keywords for search - Semantic Scholar handles natural language well
+    search_query = ' '.join(keywords)
+    
+    headers = {
+        "x-api-key": SEMANTIC_SCHOLAR_API_KEY,
+        "User-Agent": "SciCheckAgent/1.0 (mailto:alizgravenil@gmail.com)"
+    }
+    
+    params = {
+        "query": search_query,
+        "limit": max_results,
+        "fields": "title,abstract,url,authors,year,citationCount,venue,publicationTypes,externalIds"
+    }
+    
+    try:
+        response = requests.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            headers=headers,
+            params=params,
+            timeout=10
+        )
+        
+        if response.status_code == 429:
+            logging.warning("Semantic Scholar rate limit exceeded")
+            return []
+        
+        response.raise_for_status()
+        
+        data = response.json()
+        results = []
+        
+        if "data" in data and data["data"]:
+            for paper in data["data"]:
+                # Get authors as string
+                authors_list = []
+                if paper.get("authors"):
+                    authors_list = [author.get("name", "") for author in paper["authors"]]
+                authors_str = ", ".join(authors_list[:3])  # First 3 authors
+                if len(authors_list) > 3:
+                    authors_str += " et al."
+                
+                # Construct URL - prefer Semantic Scholar URL, fallback to other IDs
+                paper_url = paper.get("url", "")
+                if not paper_url and paper.get("externalIds", {}).get("DOI"):
+                    paper_url = f"https://doi.org/{paper['externalIds']['DOI']}"
+                elif not paper_url and paper.get("externalIds", {}).get("ArXiv"):
+                    paper_url = f"https://arxiv.org/abs/{paper['externalIds']['ArXiv']}"
+                
+                result = {
+                    "title": paper.get("title", "No title"),
+                    "abstract": paper.get("abstract", "Abstract not available"),
+                    "url": paper_url,
+                    "authors": authors_str,
+                    "year": paper.get("year", ""),
+                    "citation_count": paper.get("citationCount", 0),
+                    "venue": paper.get("venue", ""),
+                    "publication_types": paper.get("publicationTypes", []),
+                    "source": "Semantic Scholar"
+                }
+                results.append(result)
+        
+        logging.info(f"Semantic Scholar found {len(results)} papers for query: {search_query}")
+        return results
+        
+    except requests.exceptions.RequestException as e:
+        logging.warning(f"Semantic Scholar API call failed for query '{search_query}': {e}")
+        return []
+    except Exception as e:
+        logging.warning(f"Unexpected error in Semantic Scholar search: {e}")
+        return []
+
 def fetch_pubmed(keywords):
     """Fetch medical literature from PubMed"""
     if not keywords:
@@ -896,37 +975,62 @@ def verify_external():
     external_verdict = "External verification toggled off or no relevant sources found."
 
     if use_papers:
+        # Fetch from multiple sources with rate limiting delays
+        all_sources = []
+        
+        # 1. Semantic Scholar (primary - most reliable)
+        logging.info(f"Fetching Semantic Scholar sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
+        semantic_sources = fetch_semantic_scholar(search_keywords_for_papers)
+        all_sources.extend(semantic_sources)
+        time.sleep(1.1)  # Respect 1 request per second rate limit
+        
+        # 2. CrossRef
         logging.info(f"Fetching CrossRef sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
         crossref_sources = fetch_crossref(search_keywords_for_papers)
+        all_sources.extend(crossref_sources)
         time.sleep(0.5)
+        
+        # 3. CORE
         logging.info(f"Fetching CORE sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
         core_sources = fetch_core(search_keywords_for_papers)
+        all_sources.extend(core_sources)
         time.sleep(0.5)
+        
+        # 4. PubMed
         logging.info(f"Fetching PubMed sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
         pubmed_sources = fetch_pubmed(search_keywords_for_papers)
+        all_sources.extend(pubmed_sources)
         time.sleep(0.5)
-        sources = crossref_sources + core_sources + pubmed_sources
 
+        # Remove duplicates by URL
         seen_urls = set()
         unique_sources = []
-        for s in sources:
-            if s.get('url') and s['url'] not in seen_urls:
+        for s in all_sources:
+            url = s.get('url', '')
+            if url and url not in seen_urls:
                 unique_sources.append(s)
-                seen_urls.add(s['url'])
+                seen_urls.add(url)
+        
         sources = unique_sources
 
         if sources:
-            abstracts_and_titles = "\n\n".join(f"Title: {s['title']}\nAbstract: {s['abstract']}" for s in sources if s.get('abstract'))
-            if not abstracts_and_titles:
-                abstracts_and_titles = "\n\n".join(f"Title: {s['title']}" for s in sources)
+            # Prepare paper information for the LLM
+            abstracts_and_titles = "\n\n".join(
+                f"Title: {s['title']}\n"
+                f"Abstract: {s.get('abstract', 'Abstract not available')}\n"
+                f"Authors: {s.get('authors', '')}\n"
+                f"Year: {s.get('year', '')}\n"
+                f"Citations: {s.get('citation_count', 0)}\n"
+                f"Source: {s.get('source', 'Unknown')}"
+                for s in sources if s.get('title')
+            )
 
             prompt = f'''
-You are an AI assistant evaluating a claim based on provided scientific paper titles and abstracts.
+You are an AI assistant evaluating a claim based on provided scientific paper information.
 
 Claim to evaluate: "{claim_text}"
 
 Available Paper Information:
-
 {abstracts_and_titles}
 
 Based on this information, provide:
@@ -935,10 +1039,13 @@ Based on this information, provide:
 
 2. A concise justification (max 1000 characters) explaining how the provided papers do or do not relate to the claim.
 
-3. Reference relevant paper titles in your justification.
+3. Reference relevant paper titles and their key findings in your justification.
 
-If the provided papers are insufficient or inconclusive for a clear verdict, state "INCONCLUSIVE" and explain why (e.g., "Insufficient relevant information in provided papers").
+If the provided papers are insufficient or inconclusive for a clear verdict, state "INCONCLUSIVE" and explain why (e.g., "Insufficient relevant information in provided papers" or "Papers don't directly address the specific claim").
+
+Consider paper credibility factors like citation count, publication venue, and recency.
 '''
+
             try:
                 logging.info(f"Calling OpenRouter for external verdict for claim {claim_idx}...")
                 verdict_res = call_openrouter(prompt)
@@ -946,10 +1053,12 @@ If the provided papers are insufficient or inconclusive for a clear verdict, sta
             except Exception as e:
                 logging.error(f"Failed to generate external verdict for claim '{claim_text}': {e}")
                 external_verdict = f"Could not generate external verdict: {str(e)}"
+            
             time.sleep(1)
         else:
             external_verdict = "No relevant scientific papers found for this claim."
 
+    # Store results
     claim_data_in_cache["external_verdict"] = external_verdict
     claim_data_in_cache["sources"] = sources
 
