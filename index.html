@@ -822,35 +822,35 @@
             }
 
             function displayClaimsStructure(claims) {
-                claims.forEach((claimText, index) => {
-                    const claimId = `claim-${index}`;
-                    const claimHtml = `
-                        <div class="claim-card" id="${claimId}">
-                            <h5>Claim ${index + 1}</h5>
-                            <p class="claim-text mb-3">${escapeHTML(claimText)}</p>
-                            <strong>Model Verdict:</strong>
-                            <div id="model-verdict-${claimId}" class="verdict-box model-verdict-box mb-3" style="min-height: 50px;">
-                                <span class="text-muted">Loading model verdict...</span>
-                            </div>
-                            <strong>Suggested Research Questions:</strong>
-                            <ul id="questions-list-${claimId}" class="question-list list-group list-group-flush mb-3">
-                                <li class="list-group-item">
-                                    <span class="text-muted">Loading questions...</span>
-                                </li>
-                            </ul>
-                            <hr>
-                            <strong>External Verification (CrossRef, CORE & PubMed):</strong>
-                            <div id="external-verdict-${claimId}" class="verdict-box mb-2" style="min-height: 50px;">
-                                ${usePapersToggle.checked ? '<span class="text-muted">Loading external verification...</span>' : 'External verification is toggled off.'}
-                            </div>
-                            <ul id="external-sources-${claimId}" class="source-list list-unstyled ps-3 mb-3"></ul>
-                        </div>
-                    `;
-                    resultsContainer.innerHTML += claimHtml;
-                });
+    claims.forEach((claimText, index) => {
+        const claimId = `claim-${index}`;
+        const claimHtml = `
+        <div class="claim-card" id="${claimId}">
+            <h5>Claim ${index + 1}</h5>
+            <p class="claim-text mb-3">${escapeHTML(claimText)}</p>
+            <strong>Model Verdict:</strong>
+            <div id="model-verdict-${claimId}" class="verdict-box model-verdict-box mb-3" style="min-height: 50px;">
+                <span class="text-muted">Loading model verdict...</span>
+            </div>
+            <strong>Suggested Research Questions:</strong>
+            <ul id="questions-list-${claimId}" class="question-list list-group list-group-flush mb-3">
+                <li class="list-group-item">
+                    <span class="text-muted">Loading questions...</span>
+                </li>
+            </ul>
+            <hr>
+            <strong>External Verification (Semantic Scholar, Crossref, CORE & PubMed):</strong>
+            <div id="external-verdict-${claimId}" class="verdict-box mb-2" style="min-height: 50px;">
+                ${usePapersToggle.checked ? '<span class="text-muted">Loading external verification...</span>' : 'External verification is toggled off.'}
+            </div>
+            <ul id="external-sources-${claimId}" class="source-list list-unstyled ps-3 mb-3"></ul>
+        </div>
+        `;
+        resultsContainer.innerHTML += claimHtml;
+    });
 
-                // Auto-load details for all claims
-                autoLoadClaimDetails(claims);
+    // Auto-load details for all claims
+    autoLoadClaimDetails(claims);
             }
 
             async function autoLoadClaimDetails(claims) {
@@ -974,12 +974,19 @@
                     verdictContainer.innerHTML = formatTextWithMarkdownAndLinks(data.verdict);
 
                     if (data.sources && data.sources.length > 0) {
-                        sourcesContainer.innerHTML = data.sources
-                            .map(s => `<li>📄 <a href="${s.url}" target="_blank" rel="noopener noreferrer">${escapeHTML(s.title)}</a></li>`)
-                            .join('');
-                    } else {
-                        sourcesContainer.innerHTML = `<li>No external sources found.</li>`;
-                    }
+    sourcesContainer.innerHTML = data.sources
+        .map(s => {
+            const sourceInfo = s.source ? `[${s.source}]` : '';
+            const citationInfo = s.citation_count ? ` (${s.citation_count} citations)` : '';
+            const yearInfo = s.year ? ` (${s.year})` : '';
+            const authorsInfo = s.authors ? ` - ${s.authors}` : '';
+            
+            return `<li>📄 ${sourceInfo} <a href="${s.url}" target="_blank" rel="noopener noreferrer">${escapeHTML(s.title)}</a>${authorsInfo}${yearInfo}${citationInfo}</li>`;
+        })
+        .join('');
+} else {
+    sourcesContainer.innerHTML = `<li>No external sources found.</li>`;
+        }
                 } catch (error) {
                     verdictContainer.innerHTML = `<div class="alert alert-warning p-2 mt-2">Error: ${error.message}</div>`;
                     sourcesContainer.innerHTML = `<li>Could not fetch sources.</li>`;
