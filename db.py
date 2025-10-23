@@ -837,56 +837,51 @@ def save_uploaded_file(file, upload_folder="/home/scicheckagent/mysite/uploads")
         return None
 
 def normalize_text_for_display(text):
-    """Normalize text for HTML display (modal, inline view)"""
+    """Normalize text for HTML display with comprehensive character handling"""
     if not text:
         return text
 
     # Normalize Unicode first
-    normalized = unicodedata.normalize('NFKD', text)
+    normalized = unicodedata.normalize('NFKC', text)  # Changed to NFKC for more aggressive normalization
     
     # Comprehensive replacements for display
     replacements = {
-        # Dashes and hyphens
-        '--': '-', '---': '-', '‐': '-', '‑': '-', '‒': '-', '−': '-',
-        '–': '-', '—': '-', '―': '-',
+        # Dashes and hyphens - comprehensive coverage
+        '–': '-', '—': '-', '―': '-', '‒': '-', '‐': '-', '‑': '-',
+        '−': '-', '–': '-', '—': '-', '―': '-', '': '-', '': '-',
         
         # Smart quotes and apostrophes
-        '‘': "'", '’': "'", '“': '"', '”': '"', '´': "'", '`': "'",
-        '«': '"', '»': '"', '″': '"', '‹': "'", '›': "'",
+        '‘': "'", '’': "'", '‚': "'", '‛': "'",
+        '“': '"', '”': '"', '„': '"', '‟': '"',
+        '´': "'", '`': "'", 'ʻ': "'", 'ʼ': "'",
+        '«': '"', '»': '"', '‹': "'", '›': "'",
         
-        # Common mis-encodings from your examples
-        'â\x80\x94': '-', 'â\x80\x9c': '"', 'â\x80\x9d': '"',
-        'â\x80\x99': "'", 'â\x80\x9s': "'", 'â\x80\x91': '-',
-        'â\x80 \u0304': ' ', 'â\x82\x82': '₂', 'â\x82\x88': '₈',
-        'â\x80\x93': '-', 'â\x80': '', 'â': '',
+        # Mathematical symbols and special characters
+        '°': ' degrees ', '±': '+/-', '×': 'x', '÷': '/',
+        '≈': '~', '≠': '!=', '≤': '<=', '≥': '>=',
+        'µ': 'u', 'α': 'alpha', 'β': 'beta', 'γ': 'gamma',
+        'δ': 'delta', 'ε': 'epsilon', 'θ': 'theta',
         
-        # Mathematical and chemical notation fixes
-        'â\x80\x94': '-', 'â\x80\x9c': '"', 'â\x80\x9d': '"',
-        'â\x80\x99': "'", 'â\x80\x91': '-', 'â\x80 \u0304': '',
-        'â\x82\x82': '²', 'â\x82\x88': '⁸', 'â': '',
+        # Common problematic encodings
+        '': '', '': '', '': '', '': '', '': '',
+        '': '', '': '', '': '', '': '', '': '',
+        '': '', '': '', '': '', '': '', '': '',
+        '': '', '': '', '': '', '': '', '': '',
+        '': '', '': '', '': '', '': '', '': '',
+        '': '', '': '', '': '', '': '', '': '',
+        '': '', '': '',
         
         # Spaces and invisible characters
         '\u200b': '', '\ufeff': '', '\u202a': '', '\u202c': '',
-        '\u200e': '', '\u200f': '', ' ': ' ', ' ': ' ', ' ': ' ',
-        '': '', '﻿': '',
+        '\u200e': '', '\u200f': '', ' ': ' ', ' ': ' ', 
+        ' ': ' ', '': '', '﻿': '', '\xa0': ' ',
     }
 
     for old, new in replacements.items():
         normalized = normalized.replace(old, new)
 
-    # Fix common chemical notation patterns
-    chemical_fixes = {
-        'SiOâ\x82\x82': 'SiO₂', 'Oâ\x82\x82': 'O₂', 'COâ\x82\x82': 'CO₂',
-        'Alâ\x82\x82Oâ\x82\x83': 'Al₂O₃', 'FeO': 'FeO', 'MgO': 'MgO',
-        'TiOâ\x82\x82': 'TiO₂', 'CaO': 'CaO', 'Na₂O': 'Na₂O', 'K₂O': 'K₂O',
-        'H₂O': 'H₂O', 'CO₂': 'CO₂', 'SO₂': 'SO₂',
-    }
-    
-    for old, new in chemical_fixes.items():
-        normalized = normalized.replace(old, new)
-
     # Remove any remaining problematic control characters
-    normalized = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', normalized)
+    normalized = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]', '', normalized)
     
     return normalized
 
@@ -897,7 +892,7 @@ def normalize_text_for_pdf(text):
 
     # First apply display normalization
     text = normalize_text_for_display(text)
-    
+
     # Additional PDF-specific replacements
     pdf_replacements = {
         # Convert Greek letters to text for PDF compatibility
@@ -913,7 +908,7 @@ def normalize_text_for_pdf(text):
         'Ν': 'Nu', 'Ξ': 'Xi', 'Ο': 'Omicron', 'Π': 'Pi',
         'Ρ': 'Rho', 'Σ': 'Sigma', 'Τ': 'Tau', 'Υ': 'Upsilon',
         'Φ': 'Phi', 'Χ': 'Chi', 'Ψ': 'Psi', 'Ω': 'Omega',
-        
+
         # Fix common formatting issues
         '<br>': '\n', '<br/>': '\n', '<br />': '\n',
         '<b>': '**', '</b>': '**', '<i>': '*', '</i>': '*',
@@ -926,31 +921,31 @@ def normalize_text_for_pdf(text):
 
     # Clean up any remaining HTML tags
     text = re.sub(r'<[^>]+>', '', text)
-    
+
     # Fix multiple newlines
     text = re.sub(r'\n{3,}', '\n\n', text)
-    
+
     return text
 
 def clean_html_for_reportlab(text):
     """Specifically clean HTML for ReportLab's Paragraph parser"""
     if not text:
         return text
-    
+
     # First normalize
     text = normalize_text_for_pdf(text)
-    
+
     # Remove any remaining problematic HTML constructs
     text = re.sub(r'<br\s*/?>', '\n', text)  # Convert <br> to newlines
     text = re.sub(r'<[^>]+>', '', text)  # Remove all other HTML tags
-    
+
     # Fix common issues that break ReportLab
     text = re.sub(r'&[^;]+;', '', text)  # Remove HTML entities
     text = re.sub(r'\xa0', ' ', text)  # Replace non-breaking spaces
-    
+
     # Ensure proper paragraph separation
     text = re.sub(r'\n\s*\n', '\n\n', text)
-    
+
     return text.strip()
 
 
@@ -958,36 +953,36 @@ def convert_markdown_tables_to_simple_text(text):
     """Convert markdown tables to simple text format for PDF"""
     # First normalize the text
     text = normalize_text_for_pdf(text)
-    
+
     # Handle tables - convert to simple text format
     table_pattern = r'(\|.*\|[\s\n]*\|[-:\s|]+\|[\s\n]*(?:\|.*\|[\s\n]*)+)'
-    
+
     def replace_table(match):
         table_text = match.group(0)
         lines = [line.strip() for line in table_text.split('\n') if line.strip().startswith('|')]
-        
+
         if len(lines) < 2:
             return table_text
-        
+
         table_data = []
         for line in lines:
             cells = [cell.strip() for cell in line.split('|')[1:-1]]  # Remove empty first/last
             table_data.append(cells)
-        
+
         # Remove separator line if it exists
         if len(table_data) > 1 and all(cell.replace('-', '').replace(':', '').replace(' ', '') == '' for cell in table_data[1]):
             table_data.pop(1)
-        
+
         # Find max width for each column
         if not table_data:
             return table_text
-            
+
         col_widths = [0] * len(table_data[0])
         for row in table_data:
             for i, cell in enumerate(row):
                 if i < len(col_widths):
                     col_widths[i] = max(col_widths[i], len(cell))
-        
+
         # Build simple text table
         result = []
         for row in table_data:
@@ -996,33 +991,33 @@ def convert_markdown_tables_to_simple_text(text):
                 if i < len(col_widths):
                     row_text.append(cell.ljust(col_widths[i]))
             result.append(' | '.join(row_text))
-        
+
         return '\n'.join(result) + '\n\n'
-    
+
     return re.sub(table_pattern, replace_table, text, flags=re.MULTILINE)
 
 def draw_paragraph(pdf_canvas, text_content, style, y_pos, page_width, left_margin=0.75*inch, right_margin=0.75*inch):
     """Safe paragraph drawing with comprehensive text cleaning"""
     available_width = page_width - left_margin - right_margin
-    
+
     # Comprehensive cleaning for ReportLab
     text_content = clean_html_for_reportlab(text_content)
     text_content = convert_markdown_tables_to_simple_text(text_content)
-    
+
     # Replace newlines with <br/> for Paragraph, but only after cleaning
     text_content = text_content.replace('\n', '<br/>')
-    
+
     try:
         para = Paragraph(text_content, style)
         w, h = para.wrapOn(pdf_canvas, available_width, 0)
-        
+
         if y_pos - h < 0.75*inch:
             pdf_canvas.showPage()
             y_pos = A4[1] - 0.75*inch
-        
+
         para.drawOn(pdf_canvas, left_margin, y_pos - h)
         return y_pos - h - style.spaceAfter
-        
+
     except Exception as e:
         logging.error(f"Error drawing paragraph: {e}")
         # Fallback: draw simple text
@@ -1513,7 +1508,7 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
 ## 1. Introduction
 Briefly state the question's relevance to the claim.
 
-## 2. Analysis  
+## 2. Analysis
 Answer the research question directly, citing evidence or established principles.
 
 ## 3. Conclusion
@@ -1521,7 +1516,7 @@ Summarize how the analysis impacts the validity of the original claim.
 
 ## 4. Sources
 List up to 3 relevant sources with full URLs.
-    
+
 ---
 
 **Article Context:**
