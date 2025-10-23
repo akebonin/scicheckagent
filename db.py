@@ -107,8 +107,130 @@ def update_access_time(session_id):
     conn.commit()
     conn.close()
 
+def compute_file_hash(file_path):
+    """Compute SHA256 hash of a file"""
+    hash_sha256 = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_sha256.update(chunk)
+    return hash_sha256.hexdigest()
+
+def compute_content_hash(content):
+    """Compute SHA256 hash of text content"""
+    return hashlib.sha256(content.encode('utf-8')).hexdigest()
+
+def get_cached_media(file_hash):
+    """Get cached media extraction result"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('SELECT extracted_text FROM media_cache WHERE file_hash = ?', (file_hash,))
+    result = c.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+def store_media_cache(file_hash, media_type, extracted_text):
+    """Store media extraction result in cache"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('''
+        INSERT OR REPLACE INTO media_cache (file_hash, media_type, extracted_text)
+        VALUES (?, ?, ?)
+    ''', (file_hash, media_type, extracted_text))
+    conn.commit()
+    conn.close()
+
+def get_cached_external_sources(cache_key):
+    """Get cached external sources"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('SELECT sources_data FROM external_sources_cache WHERE cache_key = ?', (cache_key,))
+    result = c.fetchone()
+    conn.close()
+    return json.loads(result[0]) if result else None
+
+def store_external_sources_cache(cache_key, sources_data):
+    """Store external sources in cache"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('''
+        INSERT OR REPLACE INTO external_sources_cache (cache_key, sources_data)
+        VALUES (?, ?)
+    ''', (cache_key, json.dumps(sources_data)))
+    conn.commit()
+    conn.close()
+
+def cleanup_old_cache():
+    """Clean up old cache entries to prevent database bloat"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    
+    try:
+        # Clean up media cache older than 7 days
+        c.execute('DELETE FROM media_cache WHERE created_at < ?', 
+                  (datetime.now() - timedelta(days=7),))
+        media_deleted = c.rowcount
+        
+        # Clean up external sources cache older than 14 days
+        c.execute('DELETE FROM external_sources_cache WHERE created_at < ?', 
+                  (datetime.now() - timedelta(days=14),))
+        sources_deleted = c.rowcount
+        
+        # Clean up analysis sessions older than 3 days
+        c.execute('DELETE FROM analysis_sessions WHERE last_accessed < ?', 
+                  (datetime.now() - timedelta(days=3),))
+        sessions_deleted = c.rowcount
+        
+        conn.commit()
+        
+        logging.info(f"Cache cleanup completed: {media_deleted} media, {sources_deleted} sources, {sessions_deleted} sessions removed")
+        
+        # Optional: Run VACUUM if significant space was freed
+        if (media_deleted + sources_deleted + sessions_deleted) > 50:
+            c.execute('VACUUM')
+            logging.info("Database vacuum performed")
+            
+    except Exception as e:
+        logging.error(f"Cleanup error: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
 # Initialize database on startup
 init_db()
+
+def start_cleanup_thread():
+    """Start a background thread for periodic cleanup with error handling"""
+    import threading
+    import time
+    
+    def cleanup_worker():
+        # Initial delay to let the app fully start
+        time.sleep(300)  # 5 minutes
+        
+        while True:
+            try:
+                logging.info("Running scheduled cache cleanup...")
+                cleanup_old_cache()
+                logging.info("Scheduled cache cleanup completed")
+            except Exception as e:
+                logging.error(f"Cleanup worker error: {e}")
+            
+            # Sleep for 24 hours, but with shorter intervals for better shutdown handling
+            for _ in range(24):  # Check every hour instead of sleeping 24h straight
+                time.sleep(60 * 60)  # 1 hour
+                # This makes the thread more responsive to app shutdown
+    
+    thread = threading.Thread(target=cleanup_worker, daemon=True)
+    thread.name = "CacheCleanupThread"
+    thread.start()
+    logging.info("Cache cleanup thread started")
+
+# Start the cleanup thread
+start_cleanup_thread()
+
+# API Configuration  ← This is your existing line - keep it here
+OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # API Configuration
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -202,57 +324,7 @@ Claim: "{{claim}}"
 
 # Helper functions
 
-def compute_file_hash(file_path):
-    """Compute SHA256 hash of a file"""
-    hash_sha256 = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            hash_sha256.update(chunk)
-    return hash_sha256.hexdigest()
 
-def compute_content_hash(content):
-    """Compute SHA256 hash of text content"""
-    return hashlib.sha256(content.encode('utf-8')).hexdigest()
-
-def get_cached_media(file_hash):
-    """Get cached media extraction result"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('SELECT extracted_text FROM media_cache WHERE file_hash = ?', (file_hash,))
-    result = c.fetchone()
-    conn.close()
-    return result[0] if result else None
-
-def store_media_cache(file_hash, media_type, extracted_text):
-    """Store media extraction result in cache"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('''
-        INSERT OR REPLACE INTO media_cache (file_hash, media_type, extracted_text)
-        VALUES (?, ?, ?)
-    ''', (file_hash, media_type, extracted_text))
-    conn.commit()
-    conn.close()
-
-def get_cached_external_sources(cache_key):
-    """Get cached external sources"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('SELECT sources_data FROM external_sources_cache WHERE cache_key = ?', (cache_key,))
-    result = c.fetchone()
-    conn.close()
-    return json.loads(result[0]) if result else None
-
-def store_external_sources_cache(cache_key, sources_data):
-    """Store external sources in cache"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('''
-        INSERT OR REPLACE INTO external_sources_cache (cache_key, sources_data)
-        VALUES (?, ?)
-    ''', (cache_key, json.dumps(sources_data)))
-    conn.commit()
-    conn.close()
     
 def call_openrouter(prompt, stream=False, temperature=0.0, json_mode=False):
     """Calls the OpenRouter API, supports streaming and JSON mode."""
@@ -1037,6 +1109,18 @@ def get_claim_details():
     except Exception as e:
         logging.error(f"Error in get_claim_details: {e}")
         return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+
+
+@app.route("/api/cleanup-cache", methods=["POST"])
+def cleanup_cache_endpoint():
+    """Manual cache cleanup endpoint"""
+    try:
+        cleanup_old_cache()
+        return jsonify({"message": "Cache cleanup completed successfully"})
+    except Exception as e:
+        logging.error(f"Manual cleanup error: {e}")
+        return jsonify({"error": f"Cleanup failed: {str(e)}"}), 500
+
 
 @app.route("/api/verify-external", methods=["POST"])
 def verify_external():
