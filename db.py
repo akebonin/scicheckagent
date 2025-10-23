@@ -1439,44 +1439,46 @@ def stream_response():
     try:
         response = call_openrouter(prompt, stream=True)
         response.raise_for_status()
-        for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
+        
+        for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
             if chunk:
                 lines = chunk.split('\n')
                 for line in lines:
-                    if line.strip().startswith("data:"):
-                        data_part = line.strip()[len("data:"):].strip()
+                    line = line.strip()
+                    if line.startswith("data:"):
+                        data_part = line[5:].strip()  # Remove "data:"
                         if data_part == '[DONE]':
                             continue
                         try:
                             json_data = json.loads(data_part)
-                            content = json_data['choices'][0]['delta'].get('content', '')
-                            if content:
-                                # Use the new normalization function
-                                normalized_content = normalize_text_for_display(content)
-                                full_report_content += normalized_content
-                                yield f"data: {json.dumps({'content': normalized_content})}\n\n"
+                            if 'choices' in json_data and json_data['choices']:
+                                content = json_data['choices'][0].get('delta', {}).get('content', '')
+                                if content:
+                                    normalized_content = normalize_text_for_display(content)
+                                    full_report_content += normalized_content
+                                    yield f"data: {json.dumps({'content': normalized_content})}\n\n"
                         except json.JSONDecodeError:
                             continue
+                            
     except Exception as e:
-        logging.error(f"Error during report streaming for claim {claim_idx}, question {question_idx}: {e}")
-        error_message = f"data: {json.dumps({'error': str(e)})}\n\n"
-        yield error_message
+        logging.error(f"Streaming error: {e}")
+        yield f"data: {json.dumps({'error': 'Streaming failed'})}\n\n"
     finally:
         if full_report_content.strip():
-            conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-            c = conn.cursor()
-            c.execute("""
-                INSERT INTO report_cache (rq_hash, question_text, report_text, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(rq_hash) DO UPDATE SET
-                question_text=excluded.question_text,
-                report_text=excluded.report_text,
-                updated_at=CURRENT_TIMESTAMP
-            """, (rq_hash, question_text, full_report_content))
-            conn.commit()
-            conn.close()
-
-        yield "data: [DONE]\n\n"
+            try:
+                conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+                c = conn.cursor()
+                c.execute("""
+                    INSERT OR REPLACE INTO report_cache 
+                    (rq_hash, question_text, report_text, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                """, (rq_hash, question_text, full_report_content))
+                conn.commit()
+                conn.close()
+            except Exception as db_error:
+                logging.error(f"Cache error: {db_error}")
+    
+    yield "data: [DONE]\n\n"
 
     return Response(stream_response(), mimetype='text/event-stream')
 
