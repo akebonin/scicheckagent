@@ -27,6 +27,7 @@ from moviepy.editor import VideoFileClip
 import yt_dlp
 import unicodedata
 import html
+import hashlib
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -53,6 +54,24 @@ def init_db():
         last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
+    
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS media_cache (
+        file_hash TEXT PRIMARY KEY,
+        media_type TEXT NOT NULL,
+        extracted_text TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+    
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS external_sources_cache (
+        cache_key TEXT PRIMARY KEY,
+        sources_data TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -182,6 +201,59 @@ Claim: "{{claim}}"
 }
 
 # Helper functions
+
+def compute_file_hash(file_path):
+    """Compute SHA256 hash of a file"""
+    hash_sha256 = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_sha256.update(chunk)
+    return hash_sha256.hexdigest()
+
+def compute_content_hash(content):
+    """Compute SHA256 hash of text content"""
+    return hashlib.sha256(content.encode('utf-8')).hexdigest()
+
+def get_cached_media(file_hash):
+    """Get cached media extraction result"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('SELECT extracted_text FROM media_cache WHERE file_hash = ?', (file_hash,))
+    result = c.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+def store_media_cache(file_hash, media_type, extracted_text):
+    """Store media extraction result in cache"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('''
+        INSERT OR REPLACE INTO media_cache (file_hash, media_type, extracted_text)
+        VALUES (?, ?, ?)
+    ''', (file_hash, media_type, extracted_text))
+    conn.commit()
+    conn.close()
+
+def get_cached_external_sources(cache_key):
+    """Get cached external sources"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('SELECT sources_data FROM external_sources_cache WHERE cache_key = ?', (cache_key,))
+    result = c.fetchone()
+    conn.close()
+    return json.loads(result[0]) if result else None
+
+def store_external_sources_cache(cache_key, sources_data):
+    """Store external sources in cache"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('''
+        INSERT OR REPLACE INTO external_sources_cache (cache_key, sources_data)
+        VALUES (?, ?)
+    ''', (cache_key, json.dumps(sources_data)))
+    conn.commit()
+    conn.close()
+    
 def call_openrouter(prompt, stream=False, temperature=0.0, json_mode=False):
     """Calls the OpenRouter API, supports streaming and JSON mode."""
     if not OPENROUTER_API_KEY:
@@ -709,6 +781,27 @@ def convert_markdown_tables_to_simple_text(text):
 
     return re.sub(table_pattern, replace_table, text, flags=re.MULTILINE)
 
+def cleanup_old_cache():
+    """Clean up old cache entries to prevent database bloat"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    
+    # Clean up media cache older than 7 days
+    c.execute('DELETE FROM media_cache WHERE created_at < ?', 
+              (datetime.now() - timedelta(days=7),))
+    
+    # Clean up external sources cache older than 14 days
+    c.execute('DELETE FROM external_sources_cache WHERE created_at < ?', 
+              (datetime.now() - timedelta(days=14),))
+    
+    # Clean up analysis sessions older than 3 days (extended from 24 hours)
+    c.execute('DELETE FROM analysis_sessions WHERE last_accessed < ?', 
+              (datetime.now() - timedelta(days=3),))
+    
+    conn.commit()
+    conn.close()
+    logging.info("Cache cleanup completed")
+
 # API Endpoints
 
 # Redirect root to /analyze
@@ -949,69 +1042,92 @@ def get_claim_details():
 def verify_external():
     claim_idx = request.json.get("claim_idx")
     current_article_id = session.get('current_article_id')
-
+    
     if not current_article_id:
         return jsonify({"error": "Analysis context missing. Please re-run analysis."}), 400
-
+    
     article_cache_data = get_analysis(current_article_id)
     if not article_cache_data:
         return jsonify({"error": "Analysis session expired or not found."}), 400
-
+    
     claims_data_in_cache = article_cache_data.get('claims_data', [])
     use_papers = article_cache_data.get('use_papers', False)
-
+    
     if claim_idx is None or not isinstance(claim_idx, int) or claim_idx >= len(claims_data_in_cache):
         return jsonify({"error": "Invalid claim index or analysis data missing."}), 400
-
+    
     claim_data_in_cache = claims_data_in_cache[claim_idx]
     claim_text = claim_data_in_cache['text']
-
+    
+    # Check if we already have external verification results
+    if "external_verdict" in claim_data_in_cache and "sources" in claim_data_in_cache:
+        logging.info(f"Using cached external verification for claim {claim_idx}")
+        return jsonify({
+            "verdict": claim_data_in_cache["external_verdict"],
+            "sources": claim_data_in_cache["sources"],
+            "cached": True
+        })
+    
     # Retrieve stored search_keywords from cache for API calls
     search_keywords_for_papers = claim_data_in_cache.get('search_keywords', [claim_text])
     if not search_keywords_for_papers:
         search_keywords_for_papers = [claim_text]
-
+    
+    # Create cache key for external sources
+    sources_cache_key = compute_content_hash('_'.join(sorted(search_keywords_for_papers)))
+    
     sources = []
     external_verdict = "External verification toggled off or no relevant sources found."
 
     if use_papers:
-        # Fetch from multiple sources with rate limiting delays
-        all_sources = []
+        # Check cache for external sources
+        cached_sources = get_cached_external_sources(sources_cache_key)
+        
+        if cached_sources:
+            logging.info(f"Using cached external sources for keywords: {search_keywords_for_papers}")
+            sources = cached_sources
+        else:
+            # Fetch from multiple sources with rate limiting delays
+            all_sources = []
 
-        # 1. Semantic Scholar (primary - most reliable)
-        logging.info(f"Fetching Semantic Scholar sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
-        semantic_sources = fetch_semantic_scholar(search_keywords_for_papers)
-        all_sources.extend(semantic_sources)
-        time.sleep(1.1)  # Respect 1 request per second rate limit
+            # 1. Semantic Scholar (primary - most reliable)
+            logging.info(f"Fetching Semantic Scholar sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
+            semantic_sources = fetch_semantic_scholar(search_keywords_for_papers)
+            all_sources.extend(semantic_sources)
+            time.sleep(1.1)  # Respect 1 request per second rate limit
 
-        # 2. CrossRef
-        logging.info(f"Fetching CrossRef sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
-        crossref_sources = fetch_crossref(search_keywords_for_papers)
-        all_sources.extend(crossref_sources)
-        time.sleep(0.5)
+            # 2. CrossRef
+            logging.info(f"Fetching CrossRef sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
+            crossref_sources = fetch_crossref(search_keywords_for_papers)
+            all_sources.extend(crossref_sources)
+            time.sleep(0.5)
 
-        # 3. CORE
-        logging.info(f"Fetching CORE sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
-        core_sources = fetch_core(search_keywords_for_papers)
-        all_sources.extend(core_sources)
-        time.sleep(0.5)
+            # 3. CORE
+            logging.info(f"Fetching CORE sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
+            core_sources = fetch_core(search_keywords_for_papers)
+            all_sources.extend(core_sources)
+            time.sleep(0.5)
 
-        # 4. PubMed
-        logging.info(f"Fetching PubMed sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
-        pubmed_sources = fetch_pubmed(search_keywords_for_papers)
-        all_sources.extend(pubmed_sources)
-        time.sleep(0.5)
+            # 4. PubMed
+            logging.info(f"Fetching PubMed sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
+            pubmed_sources = fetch_pubmed(search_keywords_for_papers)
+            all_sources.extend(pubmed_sources)
+            time.sleep(0.5)
 
-        # Remove duplicates by URL
-        seen_urls = set()
-        unique_sources = []
-        for s in all_sources:
-            url = s.get('url', '')
-            if url and url not in seen_urls:
-                unique_sources.append(s)
-                seen_urls.add(url)
-
-        sources = unique_sources
+            # Remove duplicates by URL
+            seen_urls = set()
+            unique_sources = []
+            for s in all_sources:
+                url = s.get('url', '')
+                if url and url not in seen_urls:
+                    unique_sources.append(s)
+                    seen_urls.add(url)
+            
+            sources = unique_sources
+            
+            # Cache the sources for future use
+            if sources:
+                store_external_sources_cache(sources_cache_key, sources)
 
         if sources:
             # Prepare paper information for the LLM
@@ -1026,25 +1142,27 @@ def verify_external():
             )
 
             prompt = f'''
-You are an AI assistant evaluating a claim based on provided scientific paper information.
+            You are an AI assistant evaluating a claim based on provided scientific paper information.
 
-Claim to evaluate: "{claim_text}"
+            Claim to evaluate: "{claim_text}"
 
-Available Paper Information:
-{abstracts_and_titles}
+            Available Paper Information:
 
-Based on this information, provide:
+            {abstracts_and_titles}
 
-1. A verdict: **VERIFIED**, **PARTIALLY SUPPORTED**, **INCONCLUSIVE**, **NO RELEVANT PAPERS** or **CONTRADICTED**.
+            Based on this information, provide:
 
-2. A concise justification (max 1000 characters) explaining how the provided papers do or do not relate to the claim.
+            1. A verdict: **VERIFIED**, **PARTIALLY SUPPORTED**, **INCONCLUSIVE**, **NO RELEVANT PAPERS** or **CONTRADICTED**.
 
-3. Reference relevant paper titles and their key findings in your justification.
+            2. A concise justification (max 1000 characters) explaining how the provided papers do or do not relate to the claim.
 
-If the provided papers are insufficient or inconclusive for a clear verdict, state "INCONCLUSIVE" and explain why (e.g., "Insufficient relevant information in provided papers" or "Papers don't directly address the specific claim").
+            3. Reference relevant paper titles and their key findings in your justification.
 
-Consider paper credibility factors like citation count, publication venue, and recency.
-'''
+            If the provided papers are insufficient or inconclusive for a clear verdict, state "INCONCLUSIVE" and explain why (e.g., "Insufficient relevant information in provided papers" or "Papers don't directly address the specific claim").
+
+            Consider paper credibility factors like citation count, publication venue, and recency.
+
+            '''
 
             try:
                 logging.info(f"Calling OpenRouter for external verdict for claim {claim_idx}...")
@@ -1053,10 +1171,12 @@ Consider paper credibility factors like citation count, publication venue, and r
             except Exception as e:
                 logging.error(f"Failed to generate external verdict for claim '{claim_text}': {e}")
                 external_verdict = f"Could not generate external verdict: {str(e)}"
-
+            
             time.sleep(1)
         else:
             external_verdict = "No relevant scientific papers found for this claim."
+    else:
+        external_verdict = "No relevant scientific papers found for this claim."
 
     # Store results
     claim_data_in_cache["external_verdict"] = external_verdict
@@ -1066,26 +1186,48 @@ Consider paper credibility factors like citation count, publication venue, and r
     store_analysis(current_article_id, article_cache_data)
     update_access_time(current_article_id)
 
-    return jsonify({"verdict": external_verdict, "sources": sources})
+    return jsonify({
+        "verdict": external_verdict, 
+        "sources": sources,
+        "cached": False
+    })
+
 
 @app.route("/api/process-image", methods=["POST"])
 def process_image():
-    """Process uploaded image and extract text using OCR"""
+    """Process uploaded image and extract text using OCR with caching"""
     try:
         if 'image' not in request.files:
             return jsonify({"error": "No image file provided"}), 400
-
+        
         image_file = request.files['image']
         if image_file.filename == '':
             return jsonify({"error": "No image file selected"}), 400
 
-        # Save the uploaded image
+        # Save the uploaded image temporarily to compute hash
         image_path = save_uploaded_file(image_file)
         if not image_path:
             return jsonify({"error": "Failed to save image"}), 500
 
-        # Extract text using OCR
+        # Compute file hash and check cache
+        file_hash = compute_file_hash(image_path)
+        cached_text = get_cached_media(file_hash)
+        
+        if cached_text:
+            logging.info(f"Using cached OCR result for image hash: {file_hash}")
+            # Clean up the uploaded file
+            try:
+                os.remove(image_path)
+            except:
+                pass
+            return jsonify({"extracted_text": cached_text, "cached": True})
+
+        # Extract text using OCR if not cached
         extracted_text = analyze_image_with_ocr(image_path)
+
+        # Store in cache
+        if extracted_text:
+            store_media_cache(file_hash, 'image', extracted_text)
 
         # Clean up the uploaded file
         try:
@@ -1096,29 +1238,47 @@ def process_image():
         if not extracted_text:
             return jsonify({"error": "Could not extract text from image. Please ensure the image contains clear text."}), 400
 
-        return jsonify({"extracted_text": extracted_text})
+        return jsonify({"extracted_text": extracted_text, "cached": False})
+
     except Exception as e:
         logging.error(f"Error in process_image endpoint: {e}")
         return jsonify({"error": f"Failed to process image: {str(e)}"}), 500
 
 @app.route("/api/process-video", methods=["POST"])
 def process_video():
-    """Process uploaded video and extract transcription using Whisper."""
+    """Process uploaded video and extract transcription using Whisper with caching"""
     try:
         if 'video' not in request.files:
             return jsonify({"error": "No video file provided"}), 400
-
+        
         video_file = request.files['video']
         if video_file.filename == '':
             return jsonify({"error": "No video file selected"}), 400
 
-        # Save the uploaded video
+        # Save the uploaded video temporarily to compute hash
         video_path = save_uploaded_file(video_file)
         if not video_path:
             return jsonify({"error": "Failed to save video"}), 500
 
-        # Transcribe video
+        # Compute file hash and check cache
+        file_hash = compute_file_hash(video_path)
+        cached_transcription = get_cached_media(file_hash)
+        
+        if cached_transcription:
+            logging.info(f"Using cached transcription for video hash: {file_hash}")
+            # Clean up the uploaded file
+            try:
+                os.remove(video_path)
+            except:
+                pass
+            return jsonify({"transcription": cached_transcription, "cached": True})
+
+        # Transcribe video if not cached
         transcription = transcribe_video(video_path)
+
+        # Store in cache
+        if transcription:
+            store_media_cache(file_hash, 'video', transcription)
 
         # Clean up the uploaded file
         try:
@@ -1126,7 +1286,8 @@ def process_video():
         except:
             pass
 
-        return jsonify({"transcription": transcription})
+        return jsonify({"transcription": transcription, "cached": False})
+
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
     except Exception as e:
