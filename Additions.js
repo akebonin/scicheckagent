@@ -1,3 +1,88 @@
+// In your autoLoadClaimDetails function, modify to use cached data when available
+async function autoLoadClaimDetails(claims) {
+    const promises = claims.map(async (claim, index) => {
+        const claimId = `claim-${index}`;
+        const verdictContainerId = `model-verdict-${claimId}`;
+        const questionsContainerId = `questions-list-${claimId}`;
+        const externalVerdictContainerId = `external-verdict-${claimId}`;
+        const externalSourcesContainerId = `external-sources-${claimId}`;
+
+        try {
+            // Check if we already have model details
+            const claimElement = document.getElementById(claimId);
+            if (claimElement && claimElement.dataset.hasModelDetails) {
+                // Details already loaded, skip API call
+                console.log(`Using cached model details for claim ${index}`);
+            } else {
+                await getModelDetails(index, verdictContainerId, questionsContainerId, null, true);
+            }
+
+            if (usePapersToggle.checked) {
+                // Check if we already have external verification
+                if (claimElement && claimElement.dataset.hasExternalDetails) {
+                    console.log(`Using cached external verification for claim ${index}`);
+                } else {
+                    await verifyExternal(index, externalVerdictContainerId, externalSourcesContainerId, null, true);
+                }
+            }
+        } catch (error) {
+            console.error(`Error loading details for claim ${index}:`, error);
+        }
+    });
+
+    for (let i = 0; i < claims.length; i++) {
+        toggleLoading(runAnalysisBtn, true, 'Analyzing', `Claim ${i + 1} of ${claims.length}`);
+        await promises[i];
+    }
+    toggleLoading(runAnalysisBtn, false);
+}
+
+// Add cached indicators to the UI
+function addCachedIndicator(element, type) {
+    const indicator = document.createElement('span');
+    indicator.className = 'badge bg-secondary ms-2';
+    indicator.textContent = 'Cached';
+    indicator.title = `This ${type} was loaded from cache`;
+    element.appendChild(indicator);
+}
+
+// Modify the displayClaimsStructure function to mark elements with cache status
+function displayClaimsStructure(claims) {
+    claims.forEach((claimText, index) => {
+        const claimId = `claim-${index}`;
+        const claimHtml = `
+        <div class="claim-card" id="${claimId}">
+            <h5>Claim ${index + 1}</h5>
+            <p class="claim-text mb-3">${escapeHTML(claimText)}</p>
+            <strong>Model Verdict:</strong>
+            <div id="model-verdict-${claimId}" class="verdict-box model-verdict-box mb-3" style="min-height: 50px;">
+                <span class="text-muted">Loading model verdict...</span>
+            </div>
+            <strong>Suggested Research Questions:</strong>
+            <ul id="questions-list-${claimId}" class="question-list list-group list-group-flush mb-3">
+                <li class="list-group-item">
+                    <span class="text-muted">Loading questions...</span>
+                </li>
+            </ul>
+            <hr>
+            <strong>External Verification (Semantic Scholar, Crossref, CORE & PubMed):</strong>
+            <div id="external-verdict-${claimId}" class="verdict-box mb-2" style="min-height: 50px;">
+                ${usePapersToggle.checked ? '<span class="text-muted">Loading external verification...</span>' : 'External verification is toggled off.'}
+            </div>
+            <ul id="external-sources-${claimId}" class="source-list list-unstyled ps-3 mb-3"></ul>
+        </div>
+        `;
+        resultsContainer.innerHTML += claimHtml;
+    });
+
+    autoLoadClaimDetails(claims);
+}
+
+
+
+
+
+
 // Add this helper function
 function fileToBase64(file) {
     return new Promise((resolve, reject) => {
