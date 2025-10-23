@@ -928,33 +928,101 @@ def normalize_text_for_pdf(text):
     return text
 
 def clean_html_for_reportlab(text):
-    """Specifically clean HTML for ReportLab's Paragraph parser"""
+    """Clean HTML but preserve table structure for PDF"""
     if not text:
         return text
-
+    
     # First normalize
     text = normalize_text_for_pdf(text)
-
-    # Remove any remaining problematic HTML constructs
-    text = re.sub(r'<br\s*/?>', '\n', text)  # Convert <br> to newlines
+    
+    # Remove problematic HTML but keep table-related structure
+    text = re.sub(r'<br\s*/?>', '\n', text)
     text = re.sub(r'<[^>]+>', '', text)  # Remove all other HTML tags
-
-    # Fix common issues that break ReportLab
-    text = re.sub(r'&[^;]+;', '', text)  # Remove HTML entities
-    text = re.sub(r'\xa0', ' ', text)  # Replace non-breaking spaces
-
-    # Ensure proper paragraph separation
+    
+    # Fix common issues
+    text = re.sub(r'&[^;]+;', '', text)
+    text = re.sub(r'\xa0', ' ', text)
+    
+    # Ensure proper spacing
     text = re.sub(r'\n\s*\n', '\n\n', text)
-
+    
     return text.strip()
 
+def process_report_content_for_pdf(content):
+    """Process report content, handling mixed text and tables"""
+    lines = content.split('\n')
+    processed_blocks = []
+    current_text_block = []
+    current_table_lines = []
+    in_table = False
+    
+    for line in lines:
+        line = line.strip()
+        
+        # Check if this line starts a table
+        if line.startswith('|') and ('---' in line or any(cell.strip() for cell in line.split('|')[1:-1])):
+            if current_text_block:
+                # Save the current text block
+                processed_blocks.append(('text', '\n'.join(current_text_block)))
+                current_text_block = []
+            
+            in_table = True
+            current_table_lines.append(line)
+        
+        elif in_table and line.startswith('|'):
+            # Continue collecting table lines
+            current_table_lines.append(line)
+        
+        elif in_table and not line.startswith('|'):
+            # Table ended, process it
+            if current_table_lines:
+                table_content = '\n'.join(current_table_lines)
+                processed_blocks.append(('table', table_content))
+                current_table_lines = []
+            in_table = False
+            current_text_block.append(line)
+        
+        else:
+            # Regular text line
+            current_text_block.append(line)
+    
+    # Don't forget any remaining content
+    if current_text_block:
+        processed_blocks.append(('text', '\n'.join(current_text_block)))
+    if current_table_lines:
+        processed_blocks.append(('table', '\n'.join(current_table_lines)))
+    
+    return processed_blocks
+
+def split_long_report(report_content, max_section_length=1500):
+    """Split very long reports into manageable sections"""
+    if len(report_content) <= max_section_length:
+        return [report_content]
+    
+    # Try to split at natural boundaries
+    sections = []
+    current_section = ""
+    
+    # Split by lines and rebuild sections
+    lines = report_content.split('\n')
+    for line in lines:
+        if len(current_section + line) > max_section_length and current_section:
+            sections.append(current_section)
+            current_section = line + '\n'
+        else:
+            current_section += line + '\n'
+    
+    if current_section:
+        sections.append(current_section)
+    
+    return sections
+
 def draw_paragraph(pdf_canvas, text_content, style, y_pos, page_width, left_margin=0.75*inch, right_margin=0.75*inch):
-    """Safe paragraph drawing with comprehensive text cleaning and fallback"""
+    """Safe paragraph drawing with better page management"""
     available_width = page_width - left_margin - right_margin
     
-    # Comprehensive cleaning
+    # Clean the text but keep it simple - NO TABLE CONVERSION!
     text_content = clean_html_for_reportlab(text_content)
-    text_content = convert_markdown_tables_to_simple_text(text_content)
     
     # Replace newlines with <br/> for Paragraph
     text_content = text_content.replace('\n', '<br/>')
@@ -963,95 +1031,117 @@ def draw_paragraph(pdf_canvas, text_content, style, y_pos, page_width, left_marg
         para = Paragraph(text_content, style)
         w, h = para.wrapOn(pdf_canvas, available_width, 0)
         
-        if y_pos - h < 1.0*inch:  # Increased bottom margin
+        # Check if we need a new page - be more conservative
+        if y_pos - h < 1.5 * inch:  # Increased bottom margin
             pdf_canvas.showPage()
-            y_pos = A4[1] - 0.75*inch
+            y_pos = A4[1] - 0.75 * inch
         
         para.drawOn(pdf_canvas, left_margin, y_pos - h)
         return y_pos - h - style.spaceAfter
         
     except Exception as e:
-        logging.warning(f"Paragraph drawing failed, using fallback: {e}")
-        # Fallback: draw simple text without HTML
-        pdf_canvas.setFont("Helvetica", 9)
-        lines = text_content.replace('<br/>', '\n').replace('**', '').replace('*', '').split('\n')
-        for line in lines:
-            if y_pos < 1.0*inch:
-                pdf_canvas.showPage()
-                y_pos = A4[1] - 0.75*inch
-                pdf_canvas.setFont("Helvetica", 9)
-            
-            # Simple line wrapping
-            if len(line) > 120:
-                words = line.split()
-                current_line = ""
-                for word in words:
-                    if len(current_line + word) < 120:
-                        current_line += word + " "
-                    else:
-                        pdf_canvas.drawString(left_margin, y_pos, current_line.strip())
-                        y_pos -= 12
-                        current_line = word + " "
-                if current_line:
+        logging.warning(f"Paragraph drawing failed: {e}")
+        # Fallback to simple text
+        return draw_simple_text(pdf_canvas, text_content, y_pos, page_width, left_margin)
+
+def draw_simple_text(pdf_canvas, text_content, y_pos, page_width, left_margin):
+    """Fallback text drawing that ensures no content is lost"""
+    pdf_canvas.setFont("Helvetica", 9)
+    line_height = 11
+    lines = text_content.replace('<br/>', '\n').split('\n')
+    
+    for line in lines:
+        # Simple line wrapping
+        if len(line) > 120:
+            words = line.split()
+            current_line = ""
+            for word in words:
+                test_line = current_line + word + " "
+                if len(test_line) < 120:
+                    current_line = test_line
+                else:
+                    # Draw current line
+                    if y_pos < 1.5 * inch:
+                        pdf_canvas.showPage()
+                        y_pos = A4[1] - 0.75 * inch
+                        pdf_canvas.setFont("Helvetica", 9)
                     pdf_canvas.drawString(left_margin, y_pos, current_line.strip())
-                    y_pos -= 12
-            else:
-                pdf_canvas.drawString(left_margin, y_pos, line.strip())
-                y_pos -= 12
-        
-        return y_pos
+                    y_pos -= line_height
+                    current_line = word + " "
+            # Draw remaining line
+            if current_line:
+                if y_pos < 1.5 * inch:
+                    pdf_canvas.showPage()
+                    y_pos = A4[1] - 0.75 * inch
+                    pdf_canvas.setFont("Helvetica", 9)
+                pdf_canvas.drawString(left_margin, y_pos, current_line.strip())
+                y_pos -= line_height
+        else:
+            # Draw single line
+            if y_pos < 1.5 * inch:
+                pdf_canvas.showPage()
+                y_pos = A4[1] - 0.75 * inch
+                pdf_canvas.setFont("Helvetica", 9)
+            pdf_canvas.drawString(left_margin, y_pos, line.strip())
+            y_pos -= line_height
+    
+    return y_pos
 
-def convert_markdown_tables_to_simple_text(text):
-    """Convert markdown tables to simple text format for PDF with better handling"""
-    # First normalize the text
-    text = normalize_text_for_pdf(text)
+def parse_markdown_table(markdown_text):
+    """Parse markdown table and return data for ReportLab Table"""
+    lines = [line.strip() for line in markdown_text.split('\n') if line.strip().startswith('|')]
     
-    # Handle tables - convert to simple text format
-    table_pattern = r'(\|.*\|[\s\n]*\|[-:\s|]+\|[\s\n]*(?:\|.*\|[\s\n]*)+)'
+    if len(lines) < 2:
+        return None
     
-    def replace_table(match):
-        table_text = match.group(0)
-        lines = [line.strip() for line in table_text.split('\n') if line.strip().startswith('|')]
-        
-        if len(lines) < 2:
-            return "Table format issue\n\n"
-        
-        table_data = []
-        for line in lines:
-            cells = [cell.strip() for cell in line.split('|')[1:-1]]
-            table_data.append(cells)
-        
-        # Remove separator line if it exists
-        if len(table_data) > 1 and all(cell.replace('-', '').replace(':', '').replace(' ', '') == '' for cell in table_data[1]):
-            table_data.pop(1)
-        
-        if not table_data:
-            return "Table data empty\n\n"
-        
-        # Find max width for each column
-        col_widths = [0] * len(table_data[0])
-        for row in table_data:
-            for i, cell in enumerate(row):
-                if i < len(col_widths):
-                    # Clean cell content for width calculation
-                    clean_cell = re.sub(r'\*+', '', cell)  # Remove markdown bold
-                    col_widths[i] = max(col_widths[i], len(clean_cell))
-        
-        # Build simple text table
-        result = []
-        for row_idx, row in enumerate(table_data):
-            row_text = []
-            for i, cell in enumerate(row):
-                if i < len(col_widths):
-                    # Clean cell content
-                    clean_cell = re.sub(r'\*+', '', cell)
-                    row_text.append(clean_cell.ljust(col_widths[i]))
-            result.append(' | '.join(row_text))
-        
-        return '\n'.join(result) + '\n\n'
+    table_data = []
+    for line in lines:
+        cells = [cell.strip() for cell in line.split('|')[1:-1]]  # Remove empty first/last
+        table_data.append(cells)
     
-    return re.sub(table_pattern, replace_table, text, flags=re.MULTILINE)
+    # Remove separator line if it exists
+    if len(table_data) > 1 and all(cell.replace('-', '').replace(':', '').replace(' ', '') == '' for cell in table_data[1]):
+        table_data.pop(1)
+    
+    return table_data if table_data else None
 
+def create_table_from_data(table_data, available_width):
+    """Create a ReportLab Table object from parsed data"""
+    if not table_data:
+        return None
+    
+    # Clean the data
+    cleaned_data = []
+    for row in table_data:
+        cleaned_row = []
+        for cell in row:
+            # Remove markdown formatting but keep content
+            clean_cell = re.sub(r'\*+', '', cell)  # Remove **bold**
+            clean_cell = clean_cell.replace('<br/>', '\n')
+            cleaned_row.append(clean_cell)
+        cleaned_data.append(cleaned_row)
+    
+    # Create the table
+    table = Table(cleaned_data, colWidths=None)
+    
+    # Style the table
+    table.setStyle(TableStyle([
+        ('FONT', (0, 0), (-1, -1), 'Helvetica', 8),
+        ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 8),  # Header row bold
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('INNERGRID', (0, 0), (-1, -1), 0.25, colors.grey),
+        ('BOX', (0, 0), (-1, -1), 0.25, colors.black),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),  # Header background
+        ('PADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    
+    # Auto-size columns
+    table._argW = self._calcWidths(available_width * 0.9)  # Use 90% of available width
+    
+    return table
 
 # API Endpoints
 
@@ -1826,14 +1916,24 @@ def export_pdf():
 
         # Full report if present
         if item.get('report'):
-            y = draw_paragraph(p, "<b>AI Research Report:</b>", styles['SectionHeading'], y, width)
-            report_content_formatted = normalize_text_for_pdf(item['report'])
-            report_content_formatted = convert_markdown_tables_to_simple_text(report_content_formatted)
-            report_content_formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', report_content_formatted)
-            report_content_formatted = re.sub(r'\[(.*?)\]\((https?://[^\s\]]+)\)', r'<link href="\2">\1</link>', report_content_formatted)
-            y = draw_paragraph(p, report_content_formatted, styles['ReportBody'], y, width)
+    y = draw_paragraph(p, "<b>AI Research Report:</b>", styles['SectionHeading'], y, width)
+    
+    report_content = item['report']
+    sections = split_long_report(report_content)
+    
+    for i, section in enumerate(sections):
+        y = draw_paragraph(p, section, styles['ReportBody'], y, width)
+        
+        # Add a small gap between sections, but not after the last one
+        if i < len(sections) - 1:
+            y -= 10
+        
+        # Extra safety check - if we're getting too low, new page
+        if y < 2 * inch:
+            p.showPage()
+            y = A4[1] - 0.75 * inch
 
-        y -= 20
+    y -= 20
 
     p.save()
     buffer.seek(0)
