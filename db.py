@@ -948,88 +948,109 @@ def clean_html_for_reportlab(text):
 
     return text.strip()
 
+def draw_paragraph(pdf_canvas, text_content, style, y_pos, page_width, left_margin=0.75*inch, right_margin=0.75*inch):
+    """Safe paragraph drawing with comprehensive text cleaning and fallback"""
+    available_width = page_width - left_margin - right_margin
+    
+    # Comprehensive cleaning
+    text_content = clean_html_for_reportlab(text_content)
+    text_content = convert_markdown_tables_to_simple_text(text_content)
+    
+    # Replace newlines with <br/> for Paragraph
+    text_content = text_content.replace('\n', '<br/>')
+    
+    try:
+        para = Paragraph(text_content, style)
+        w, h = para.wrapOn(pdf_canvas, available_width, 0)
+        
+        if y_pos - h < 1.0*inch:  # Increased bottom margin
+            pdf_canvas.showPage()
+            y_pos = A4[1] - 0.75*inch
+        
+        para.drawOn(pdf_canvas, left_margin, y_pos - h)
+        return y_pos - h - style.spaceAfter
+        
+    except Exception as e:
+        logging.warning(f"Paragraph drawing failed, using fallback: {e}")
+        # Fallback: draw simple text without HTML
+        pdf_canvas.setFont("Helvetica", 9)
+        lines = text_content.replace('<br/>', '\n').replace('**', '').replace('*', '').split('\n')
+        for line in lines:
+            if y_pos < 1.0*inch:
+                pdf_canvas.showPage()
+                y_pos = A4[1] - 0.75*inch
+                pdf_canvas.setFont("Helvetica", 9)
+            
+            # Simple line wrapping
+            if len(line) > 120:
+                words = line.split()
+                current_line = ""
+                for word in words:
+                    if len(current_line + word) < 120:
+                        current_line += word + " "
+                    else:
+                        pdf_canvas.drawString(left_margin, y_pos, current_line.strip())
+                        y_pos -= 12
+                        current_line = word + " "
+                if current_line:
+                    pdf_canvas.drawString(left_margin, y_pos, current_line.strip())
+                    y_pos -= 12
+            else:
+                pdf_canvas.drawString(left_margin, y_pos, line.strip())
+                y_pos -= 12
+        
+        return y_pos
 
 def convert_markdown_tables_to_simple_text(text):
-    """Convert markdown tables to simple text format for PDF"""
+    """Convert markdown tables to simple text format for PDF with better handling"""
     # First normalize the text
     text = normalize_text_for_pdf(text)
-
+    
     # Handle tables - convert to simple text format
     table_pattern = r'(\|.*\|[\s\n]*\|[-:\s|]+\|[\s\n]*(?:\|.*\|[\s\n]*)+)'
-
+    
     def replace_table(match):
         table_text = match.group(0)
         lines = [line.strip() for line in table_text.split('\n') if line.strip().startswith('|')]
-
+        
         if len(lines) < 2:
-            return table_text
-
+            return "Table format issue\n\n"
+        
         table_data = []
         for line in lines:
-            cells = [cell.strip() for cell in line.split('|')[1:-1]]  # Remove empty first/last
+            cells = [cell.strip() for cell in line.split('|')[1:-1]]
             table_data.append(cells)
-
+        
         # Remove separator line if it exists
         if len(table_data) > 1 and all(cell.replace('-', '').replace(':', '').replace(' ', '') == '' for cell in table_data[1]):
             table_data.pop(1)
-
-        # Find max width for each column
+        
         if not table_data:
-            return table_text
-
+            return "Table data empty\n\n"
+        
+        # Find max width for each column
         col_widths = [0] * len(table_data[0])
         for row in table_data:
             for i, cell in enumerate(row):
                 if i < len(col_widths):
-                    col_widths[i] = max(col_widths[i], len(cell))
-
+                    # Clean cell content for width calculation
+                    clean_cell = re.sub(r'\*+', '', cell)  # Remove markdown bold
+                    col_widths[i] = max(col_widths[i], len(clean_cell))
+        
         # Build simple text table
         result = []
-        for row in table_data:
+        for row_idx, row in enumerate(table_data):
             row_text = []
             for i, cell in enumerate(row):
                 if i < len(col_widths):
-                    row_text.append(cell.ljust(col_widths[i]))
+                    # Clean cell content
+                    clean_cell = re.sub(r'\*+', '', cell)
+                    row_text.append(clean_cell.ljust(col_widths[i]))
             result.append(' | '.join(row_text))
-
+        
         return '\n'.join(result) + '\n\n'
-
+    
     return re.sub(table_pattern, replace_table, text, flags=re.MULTILINE)
-
-def draw_paragraph(pdf_canvas, text_content, style, y_pos, page_width, left_margin=0.75*inch, right_margin=0.75*inch):
-    """Safe paragraph drawing with comprehensive text cleaning"""
-    available_width = page_width - left_margin - right_margin
-
-    # Comprehensive cleaning for ReportLab
-    text_content = clean_html_for_reportlab(text_content)
-    text_content = convert_markdown_tables_to_simple_text(text_content)
-
-    # Replace newlines with <br/> for Paragraph, but only after cleaning
-    text_content = text_content.replace('\n', '<br/>')
-
-    try:
-        para = Paragraph(text_content, style)
-        w, h = para.wrapOn(pdf_canvas, available_width, 0)
-
-        if y_pos - h < 0.75*inch:
-            pdf_canvas.showPage()
-            y_pos = A4[1] - 0.75*inch
-
-        para.drawOn(pdf_canvas, left_margin, y_pos - h)
-        return y_pos - h - style.spaceAfter
-
-    except Exception as e:
-        logging.error(f"Error drawing paragraph: {e}")
-        # Fallback: draw simple text
-        pdf_canvas.setFont("Helvetica", 10)
-        lines = text_content.replace('<br/>', '\n').split('\n')
-        for line in lines:
-            if y_pos < 1.5*inch:
-                pdf_canvas.showPage()
-                y_pos = A4[1] - 0.75*inch
-            pdf_canvas.drawString(left_margin, y_pos, line[:100])  # Limit line length
-            y_pos -= 12
-        return y_pos
 
 
 # API Endpoints
@@ -1496,27 +1517,28 @@ def generate_report():
 You are an AI researcher writing a short, evidence-based report (maximum 1000 words). Your task is to investigate the research question in relation to the claim using verifiable scientific knowledge. Use the article context to ground your analysis where helpful. Clearly explain how the answer to the research question supports, contradicts, or contextualizes the claim. Provide concise reasoning and avoid speculation.
 
 **CRITICAL FORMATTING REQUIREMENTS:**
-- Use ONLY plain text with basic Markdown for formatting
-- NO HTML tags of any kind (no <br>, <b>, <i>, etc.)
-- NO complex tables - use simple text descriptions instead
-- Use **bold** for emphasis, not HTML
-- Use simple bullet points with * or -
+- Use ONLY plain text with basic formatting
+- NO HTML tags of any kind
+- Use simple dash "-" for ranges (NOT en-dash or em-dash)
+- Use simple quotes "' for apostrophes and quotes
+- For tables: use simple text with | separators OR just describe the data
+- Use **bold** for emphasis only when necessary
+- Use simple bullet points with * 
 - Separate sections with clear headings using ##
 
 **Structure:**
+## 1. **Introduction**
+[Content]
 
-## 1. Introduction
-Briefly state the question's relevance to the claim.
+## 2. **Analysis**  
+[Content - use simple text descriptions instead of complex tables when possible]
 
-## 2. Analysis
-Answer the research question directly, citing evidence or established principles.
+## 3. **Conclusion**
+[Content]
 
-## 3. Conclusion
-Summarize how the analysis impacts the validity of the original claim.
-
-## 4. Sources
-List up to 3 relevant sources with full URLs.
-
+## 4. **Sources**
+[Content]
+    
 ---
 
 **Article Context:**
@@ -1753,17 +1775,58 @@ def export_pdf():
         return "No valid reports selected for export.", 400
 
     # PDF generation
+    
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
 
-    styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name='ClaimHeading', parent=styles['h2'], fontName='Helvetica-Bold', fontSize=14, spaceAfter=6))
-    styles.add(ParagraphStyle(name='SectionHeading', parent=styles['h3'], fontName='Helvetica-Bold', fontSize=12, spaceAfter=4, textColor=colors.darkblue))
-    styles.add(ParagraphStyle(name='NormalParagraph', parent=styles['Normal'], fontName='Helvetica', fontSize=10, leading=12, spaceAfter=8))
-    styles.add(ParagraphStyle(name='SourceLink', parent=styles['NormalParagraph'], textColor=colors.blue, fontName='Helvetica', fontSize=9, leading=10, spaceAfter=4))
-    styles.add(ParagraphStyle(name='ReportBody', parent=styles['NormalParagraph'], fontName='Helvetica', fontSize=10, leading=14, spaceAfter=10))
+    # Register better fonts
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    
+    try:
+        # Try to register Arial for better Unicode support
+        pdfmetrics.registerFont(TTFont('Arial', 'Arial.ttf'))
+        pdfmetrics.registerFont(TTFont('Arial-Bold', 'Arial_Bold.ttf'))
+        default_font = 'Arial'
+    except:
+        # Fallback to Helvetica
+        default_font = 'Helvetica'
 
+    styles = getSampleStyleSheet()
+    
+    # Create custom styles with better fonts
+    styles.add(ParagraphStyle(name='ClaimHeading',
+        parent=styles['h2'], 
+        fontName=f'{default_font}-Bold', 
+        fontSize=14, 
+        spaceAfter=6,
+        encoding='utf-8'))
+
+    styles.add(ParagraphStyle(name='SectionHeading',
+        parent=styles['h3'], 
+        fontName=f'{default_font}-Bold', 
+        fontSize=12, 
+        spaceAfter=4, 
+        textColor=colors.darkblue,
+        encoding='utf-8'))
+
+    styles.add(ParagraphStyle(name='NormalParagraph',
+        parent=styles['Normal'], 
+        fontName=default_font, 
+        fontSize=10, 
+        leading=12, 
+        spaceAfter=8,
+        encoding='utf-8'))
+
+    styles.add(ParagraphStyle(name='ReportBody',
+        parent=styles['NormalParagraph'], 
+        fontName=default_font, 
+        fontSize=9,  # Smaller font to fit more content
+        leading=11, 
+        spaceAfter=6,
+        encoding='utf-8'))
+        
     y = height - inch
 
     p.setFont("Helvetica-Bold", 20)
