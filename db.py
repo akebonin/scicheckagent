@@ -54,7 +54,7 @@ def init_db():
         last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
-    
+
     c.execute('''
     CREATE TABLE IF NOT EXISTS media_cache (
         file_hash TEXT PRIMARY KEY,
@@ -63,7 +63,7 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
-    
+
     c.execute('''
     CREATE TABLE IF NOT EXISTS external_sources_cache (
         cache_key TEXT PRIMARY KEY,
@@ -71,9 +71,101 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
-    
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS global_content_cache (
+            content_hash TEXT PRIMARY KEY,
+            analysis_mode TEXT NOT NULL,
+            claims_data TEXT NOT NULL,
+            model_verdicts TEXT NOT NULL,
+            external_sources TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            access_count INTEGER DEFAULT 1,
+            last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     conn.commit()
     conn.close()
+
+def get_global_cache(content_hash, analysis_mode):
+    """Get cached analysis for content + mode combination"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('''
+        SELECT claims_data, model_verdicts, external_sources, access_count
+        FROM global_content_cache
+        WHERE content_hash = ? AND analysis_mode = ?
+    ''', (content_hash, analysis_mode))
+    result = c.fetchone()
+    conn.close()
+
+    if result:
+        # Update access count and timestamp
+        update_global_cache_access(content_hash, analysis_mode)
+        return {
+            'claims_data': json.loads(result[0]),
+            'model_verdicts': json.loads(result[1]),
+            'external_sources': json.loads(result[2]),
+            'access_count': result[3]
+        }
+    return None
+
+def store_global_cache(content_hash, analysis_mode, claims_data, model_verdicts, external_sources):
+    """Store or update global cache"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+
+    c.execute('''
+        INSERT OR REPLACE INTO global_content_cache
+        (content_hash, analysis_mode, claims_data, model_verdicts, external_sources, access_count, last_accessed)
+        VALUES (?, ?, ?, ?, ?,
+                COALESCE((SELECT access_count + 1 FROM global_content_cache WHERE content_hash = ? AND analysis_mode = ?), 1),
+                ?)
+    ''', (content_hash, analysis_mode, json.dumps(claims_data), json.dumps(model_verdicts),
+          json.dumps(external_sources), content_hash, analysis_mode, datetime.now()))
+
+    conn.commit()
+    conn.close()
+
+def update_global_cache_access(content_hash, analysis_mode):
+    """Update access count and timestamp for global cache"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('''
+        UPDATE global_content_cache
+        SET access_count = access_count + 1, last_accessed = ?
+        WHERE content_hash = ? AND analysis_mode = ?
+    ''', (datetime.now(), content_hash, analysis_mode))
+    conn.commit()
+    conn.close()
+
+# Add this function to store session data in your existing database
+def store_user_session(user_session_id, data):
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            session_id TEXT PRIMARY KEY,
+            session_data TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    c.execute('''
+        INSERT OR REPLACE INTO user_sessions (session_id, session_data, last_accessed)
+        VALUES (?, ?, ?)
+    ''', (user_session_id, json.dumps(data), datetime.now()))
+    conn.commit()
+    conn.close()
+
+def get_user_session(user_session_id):
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('SELECT session_data FROM user_sessions WHERE session_id = ?', (user_session_id,))
+    result = c.fetchone()
+    conn.close()
+    return json.loads(result[0]) if result else None
 
 def store_analysis(session_id, article_data):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
@@ -159,36 +251,156 @@ def store_external_sources_cache(cache_key, sources_data):
     conn.commit()
     conn.close()
 
+def update_global_cache_with_verdicts(content_hash, analysis_mode, claim_idx, verdict_data):
+    """Update global cache with model verdicts and questions"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+
+    # Get current cache data
+    c.execute('SELECT model_verdicts FROM global_content_cache WHERE content_hash = ? AND analysis_mode = ?',
+              (content_hash, analysis_mode))
+    result = c.fetchone()
+
+    if result:
+        current_verdicts = json.loads(result[0]) if result[0] else {}
+        if not isinstance(current_verdicts, dict):
+            current_verdicts = {}
+
+        # Update with new verdict data
+        current_verdicts[str(claim_idx)] = verdict_data
+
+        # Update the cache
+        c.execute('''
+            UPDATE global_content_cache
+            SET model_verdicts = ?, last_accessed = ?
+            WHERE content_hash = ? AND analysis_mode = ?
+        ''', (json.dumps(current_verdicts), datetime.now(), content_hash, analysis_mode))
+
+        conn.commit()
+        logging.info(f"✅ Updated global cache with model verdict for claim {claim_idx}")
+
+    conn.close()
+
+def update_global_cache_with_external(content_hash, analysis_mode, claim_idx, external_data):
+    """Update global cache with external verification results"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+
+    # Get current cache data
+    c.execute('SELECT external_sources FROM global_content_cache WHERE content_hash = ? AND analysis_mode = ?',
+              (content_hash, analysis_mode))
+    result = c.fetchone()
+
+    if result:
+        current_external = json.loads(result[0]) if result[0] else {}
+        if not isinstance(current_external, dict):
+            current_external = {}
+
+        # Update with new external data
+        current_external[str(claim_idx)] = external_data
+
+        # Update the cache
+        c.execute('''
+            UPDATE global_content_cache
+            SET external_sources = ?, last_accessed = ?
+            WHERE content_hash = ? AND analysis_mode = ?
+        ''', (json.dumps(current_external), datetime.now(), content_hash, analysis_mode))
+
+        conn.commit()
+        logging.info(f"✅ Updated global cache with external sources for claim {claim_idx}")
+
+    conn.close()
+
+def update_global_cache_with_report(content_hash, analysis_mode, claim_idx, question_idx, report_data):
+    """Update global cache with research reports"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+
+    # Get current cache data
+    c.execute('SELECT external_sources FROM global_content_cache WHERE content_hash = ? AND analysis_mode = ?',
+              (content_hash, analysis_mode))
+    result = c.fetchone()
+
+    if result:
+        current_external = json.loads(result[0]) if result[0] else {}
+        if not isinstance(current_external, dict):
+            current_external = {}
+
+        # Create report key and store
+        report_key = f"claim_{claim_idx}_question_{question_idx}"
+        current_external[report_key] = report_data
+
+        # Update the cache
+        c.execute('''
+            UPDATE global_content_cache
+            SET external_sources = ?, last_accessed = ?
+            WHERE content_hash = ? AND analysis_mode = ?
+        ''', (json.dumps(current_external), datetime.now(), content_hash, analysis_mode))
+
+        conn.commit()
+        logging.info(f"✅ Updated global cache with report for claim {claim_idx}, question {question_idx}")
+
+    conn.close()
+
+def get_global_cache_complete(content_hash, analysis_mode):
+    """Get complete cached analysis including all components"""
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute('''
+        SELECT claims_data, model_verdicts, external_sources, access_count
+        FROM global_content_cache
+        WHERE content_hash = ? AND analysis_mode = ?
+    ''', (content_hash, analysis_mode))
+    result = c.fetchone()
+    conn.close()
+
+    if result:
+        # Update access count
+        update_global_cache_access(content_hash, analysis_mode)
+
+        return {
+            'claims_data': json.loads(result[0]),
+            'model_verdicts': json.loads(result[1]) if result[1] else {},
+            'external_sources': json.loads(result[2]) if result[2] else {},
+            'access_count': result[3]
+        }
+    return None
+
 def cleanup_old_cache():
     """Clean up old cache entries to prevent database bloat"""
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
-    
+
     try:
-        # Clean up media cache older than 7 days
-        c.execute('DELETE FROM media_cache WHERE created_at < ?', 
-                  (datetime.now() - timedelta(days=7),))
+        # Clean up media cache older than 30 days
+        c.execute('DELETE FROM media_cache WHERE created_at < ?',
+                  (datetime.now() - timedelta(days=30),))
         media_deleted = c.rowcount
-        
-        # Clean up external sources cache older than 14 days
-        c.execute('DELETE FROM external_sources_cache WHERE created_at < ?', 
-                  (datetime.now() - timedelta(days=14),))
+
+        # Clean up external sources cache older than 30 days
+        c.execute('DELETE FROM external_sources_cache WHERE created_at < ?',
+                  (datetime.now() - timedelta(days=30),))
         sources_deleted = c.rowcount
-        
-        # Clean up analysis sessions older than 3 days
-        c.execute('DELETE FROM analysis_sessions WHERE last_accessed < ?', 
-                  (datetime.now() - timedelta(days=3),))
+
+        # Clean up analysis sessions older than 7 days
+        c.execute('DELETE FROM analysis_sessions WHERE last_accessed < ?',
+                  (datetime.now() - timedelta(days=7),))
         sessions_deleted = c.rowcount
-        
+
+        # ✅ Keep GLOBAL content cache for 90 DAYS (viral articles)
+        c.execute('DELETE FROM global_content_cache WHERE last_accessed < ?',
+                 (datetime.now() - timedelta(days=90),))
+        global_cache_deleted = c.rowcount
+
         conn.commit()
-        
+
         logging.info(f"Cache cleanup completed: {media_deleted} media, {sources_deleted} sources, {sessions_deleted} sessions removed")
-        
+
         # Optional: Run VACUUM if significant space was freed
-        if (media_deleted + sources_deleted + sessions_deleted) > 50:
+        if (media_deleted + sources_deleted + sessions_deleted + global_cache_deleted) > 50:
             c.execute('VACUUM')
             logging.info("Database vacuum performed")
-            
+
     except Exception as e:
         logging.error(f"Cleanup error: {e}")
         conn.rollback()
@@ -199,35 +411,34 @@ def cleanup_old_cache():
 # Initialize database on startup
 init_db()
 
+
 def start_cleanup_thread():
     """Start a background thread for periodic cleanup with error handling"""
     import threading
     import time
-    
+
     def cleanup_worker():
-        # Initial delay to let the app fully start
-        time.sleep(300)  # 5 minutes
-        
+        # Wait 1 minute after startup
+        time.sleep(60)
+
         while True:
             try:
                 logging.info("Running scheduled cache cleanup...")
                 cleanup_old_cache()
                 logging.info("Scheduled cache cleanup completed")
+
+                # Sleep for 24 hours instead of checking every hour
+                time.sleep(24 * 60 * 60)  # 24 hours
+
             except Exception as e:
                 logging.error(f"Cleanup worker error: {e}")
-            
-            # Sleep for 24 hours, but with shorter intervals for better shutdown handling
-            for _ in range(24):  # Check every hour instead of sleeping 24h straight
-                time.sleep(60 * 60)  # 1 hour
-                # This makes the thread more responsive to app shutdown
-    
+                # Sleep for 1 hour on error, then retry
+                time.sleep(60 * 60)
+
     thread = threading.Thread(target=cleanup_worker, daemon=True)
     thread.name = "CacheCleanupThread"
     thread.start()
-    logging.info("Cache cleanup thread started")
-
-# Start the cleanup thread
-start_cleanup_thread()
+    logging.info("Cache cleanup thread started (runs once per day)")
 
 # API Configuration  ← This is your existing line - keep it here
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -325,7 +536,7 @@ Claim: "{{claim}}"
 # Helper functions
 
 
-    
+
 def call_openrouter(prompt, stream=False, temperature=0.0, json_mode=False):
     """Calls the OpenRouter API, supports streaming and JSON mode."""
     if not OPENROUTER_API_KEY:
@@ -853,26 +1064,6 @@ def convert_markdown_tables_to_simple_text(text):
 
     return re.sub(table_pattern, replace_table, text, flags=re.MULTILINE)
 
-def cleanup_old_cache():
-    """Clean up old cache entries to prevent database bloat"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    
-    # Clean up media cache older than 7 days
-    c.execute('DELETE FROM media_cache WHERE created_at < ?', 
-              (datetime.now() - timedelta(days=7),))
-    
-    # Clean up external sources cache older than 14 days
-    c.execute('DELETE FROM external_sources_cache WHERE created_at < ?', 
-              (datetime.now() - timedelta(days=14),))
-    
-    # Clean up analysis sessions older than 3 days (extended from 24 hours)
-    c.execute('DELETE FROM analysis_sessions WHERE last_accessed < ?', 
-              (datetime.now() - timedelta(days=3),))
-    
-    conn.commit()
-    conn.close()
-    logging.info("Cache cleanup completed")
 
 # API Endpoints
 
@@ -935,7 +1126,7 @@ def extract_article():
 
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
-    """API endpoint to extract claims ONLY."""
+    """API endpoint to extract claims ONLY with global content caching."""
     data = request.json
     text = data.get("text")
     mode = data.get("mode")
@@ -944,23 +1135,63 @@ def analyze():
     if not text or not mode:
         return jsonify({"error": "Missing text or analysis mode."}), 400
 
+    # Create content hash (text + mode combination)
+    content_hash = compute_content_hash(f"{text}_{mode}")
+
+    # ✅ CHECK GLOBAL CACHE FIRST
+    cached_analysis = get_global_cache(content_hash, mode)
+    if cached_analysis:
+        logging.info(f"✅ GLOBAL CACHE HIT for content: {content_hash[:16]}...")
+        logging.info(f"✅ Serving cached analysis for '{text[:50]}...' with mode '{mode}'")
+
+        # Still create user session for this analysis (for UI consistency)
+        article_id = str(uuid.uuid4())
+        session_data = {
+            "text": text,
+            "mode": mode,
+            "use_papers": use_papers,
+            "claims_data": cached_analysis['claims_data'],
+            "cached_from_global": True,
+            "global_cache_hash": content_hash
+        }
+        store_analysis(article_id, session_data)
+        session['current_article_id'] = article_id
+
+        # Return cached claims
+        claims_list = [claim['text'] for claim in cached_analysis['claims_data']]
+        return jsonify({
+            "claims": claims_list,
+            "cached": True,
+            "global_cache": True,
+            "cache_info": f"Serving from global cache (used {cached_analysis.get('access_count', 1)} times)"
+        })
+
+    # 🔄 No cache found - proceed with normal analysis
+    logging.info(f"🔄 GLOBAL CACHE MISS for content: {content_hash[:16]}...")
+    logging.info(f"🔄 Analyzing fresh content: '{text[:50]}...'")
+
     article_id = str(uuid.uuid4())
     session_data = {
         "text": text,
         "mode": mode,
         "use_papers": use_papers,
-        "claims_data": []
+        "claims_data": [],
+        "cached_from_global": False
     }
+
+    # Store initial session data
     store_analysis(article_id, session_data)
     session['current_article_id'] = article_id
 
     extraction_prompt = extraction_templates[mode].format(text=text)
+
     try:
         logging.info("Calling OpenRouter for claim extraction...")
         res = call_openrouter(extraction_prompt)
         raw_claims = res.json()["choices"][0]["message"]["content"]
 
         if "No explicit claims found" in raw_claims or not raw_claims.strip():
+            # Update session with empty claims
             session_data["claims_data"] = []
             store_analysis(article_id, session_data)
             return jsonify({"claims": []})
@@ -979,11 +1210,35 @@ def analyze():
 
         claims_list = [c for c in claims_list if len(c) > 10 and not c.lower().startswith(("output:", "text:", "no explicit claims found"))]
 
-        for claim_text in claims_list:
-            session_data["claims_data"].append({"text": claim_text})
+        # CRITICAL: Update the session data with claims
+        current_session_data = get_analysis(article_id)
+        if current_session_data:
+            # Update the claims data in the session
+            current_session_data["claims_data"] = [{"text": claim_text} for claim_text in claims_list]
+            # Store the updated session data back to database
+            store_analysis(article_id, current_session_data)
+            logging.info(f"✅ Updated session with {len(claims_list)} claims for article_id: {article_id}")
 
-        store_analysis(article_id, session_data)
-        return jsonify({"claims": claims_list})
+            # ✅ STORE IN GLOBAL CACHE for future users
+            if claims_list:
+                store_global_cache(content_hash, mode,
+                                  [{"text": claim} for claim in claims_list],
+                                  {},  # Model verdicts will be filled by get_claim_details
+                                  {})  # External sources will be filled by verify_external
+                logging.info(f"✅ Stored in GLOBAL CACHE for future users: {content_hash[:16]}...")
+        else:
+            # Fallback: create new session data if retrieval failed
+            session_data["claims_data"] = [{"text": claim_text} for claim_text in claims_list]
+            store_analysis(article_id, session_data)
+            logging.info(f"✅ Created new session with {len(claims_list)} claims for article_id: {article_id}")
+
+        return jsonify({
+            "claims": claims_list,
+            "cached": False,
+            "global_cache": False,
+            "cache_info": "Fresh analysis - now cached for future users"
+        })
+
     except Exception as e:
         logging.error(f"Failed to extract claims: {e}")
         return jsonify({"error": f"Failed to extract claims: {str(e)}"}), 500
@@ -1023,7 +1278,8 @@ def get_claim_details():
             return jsonify({
                 "model_verdict": claim_item_in_cache["model_verdict"],
                 "questions": claim_item_in_cache["questions"],
-                "search_keywords": claim_item_in_cache.get("search_keywords", [])
+                "search_keywords": claim_item_in_cache.get("search_keywords", []),
+                "cached": True
             })
 
         # Generate verdict with retry loop
@@ -1126,23 +1382,23 @@ def cleanup_cache_endpoint():
 def verify_external():
     claim_idx = request.json.get("claim_idx")
     current_article_id = session.get('current_article_id')
-    
+
     if not current_article_id:
         return jsonify({"error": "Analysis context missing. Please re-run analysis."}), 400
-    
+
     article_cache_data = get_analysis(current_article_id)
     if not article_cache_data:
         return jsonify({"error": "Analysis session expired or not found."}), 400
-    
+
     claims_data_in_cache = article_cache_data.get('claims_data', [])
     use_papers = article_cache_data.get('use_papers', False)
-    
+
     if claim_idx is None or not isinstance(claim_idx, int) or claim_idx >= len(claims_data_in_cache):
         return jsonify({"error": "Invalid claim index or analysis data missing."}), 400
-    
+
     claim_data_in_cache = claims_data_in_cache[claim_idx]
     claim_text = claim_data_in_cache['text']
-    
+
     # Check if we already have external verification results
     if "external_verdict" in claim_data_in_cache and "sources" in claim_data_in_cache:
         logging.info(f"Using cached external verification for claim {claim_idx}")
@@ -1151,22 +1407,22 @@ def verify_external():
             "sources": claim_data_in_cache["sources"],
             "cached": True
         })
-    
+
     # Retrieve stored search_keywords from cache for API calls
     search_keywords_for_papers = claim_data_in_cache.get('search_keywords', [claim_text])
     if not search_keywords_for_papers:
         search_keywords_for_papers = [claim_text]
-    
+
     # Create cache key for external sources
     sources_cache_key = compute_content_hash('_'.join(sorted(search_keywords_for_papers)))
-    
+
     sources = []
     external_verdict = "External verification toggled off or no relevant sources found."
 
     if use_papers:
         # Check cache for external sources
         cached_sources = get_cached_external_sources(sources_cache_key)
-        
+
         if cached_sources:
             logging.info(f"Using cached external sources for keywords: {search_keywords_for_papers}")
             sources = cached_sources
@@ -1206,9 +1462,9 @@ def verify_external():
                 if url and url not in seen_urls:
                     unique_sources.append(s)
                     seen_urls.add(url)
-            
+
             sources = unique_sources
-            
+
             # Cache the sources for future use
             if sources:
                 store_external_sources_cache(sources_cache_key, sources)
@@ -1255,7 +1511,7 @@ def verify_external():
             except Exception as e:
                 logging.error(f"Failed to generate external verdict for claim '{claim_text}': {e}")
                 external_verdict = f"Could not generate external verdict: {str(e)}"
-            
+
             time.sleep(1)
         else:
             external_verdict = "No relevant scientific papers found for this claim."
@@ -1271,7 +1527,7 @@ def verify_external():
     update_access_time(current_article_id)
 
     return jsonify({
-        "verdict": external_verdict, 
+        "verdict": external_verdict,
         "sources": sources,
         "cached": False
     })
@@ -1283,7 +1539,7 @@ def process_image():
     try:
         if 'image' not in request.files:
             return jsonify({"error": "No image file provided"}), 400
-        
+
         image_file = request.files['image']
         if image_file.filename == '':
             return jsonify({"error": "No image file selected"}), 400
@@ -1296,7 +1552,7 @@ def process_image():
         # Compute file hash and check cache
         file_hash = compute_file_hash(image_path)
         cached_text = get_cached_media(file_hash)
-        
+
         if cached_text:
             logging.info(f"Using cached OCR result for image hash: {file_hash}")
             # Clean up the uploaded file
@@ -1334,7 +1590,7 @@ def process_video():
     try:
         if 'video' not in request.files:
             return jsonify({"error": "No video file provided"}), 400
-        
+
         video_file = request.files['video']
         if video_file.filename == '':
             return jsonify({"error": "No video file selected"}), 400
@@ -1347,7 +1603,7 @@ def process_video():
         # Compute file hash and check cache
         file_hash = compute_file_hash(video_path)
         cached_transcription = get_cached_media(file_hash)
-        
+
         if cached_transcription:
             logging.info(f"Using cached transcription for video hash: {file_hash}")
             # Clean up the uploaded file
