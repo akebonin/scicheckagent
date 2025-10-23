@@ -843,51 +843,61 @@ def normalize_text_for_display(text):
 
     # Normalize Unicode first
     normalized = unicodedata.normalize('NFKD', text)
-
+    
     # Comprehensive replacements for display
     replacements = {
         # Dashes and hyphens
-        '–': '-', '—': '-', '‐': '-', '‑': '-', '‒': '-', '−': '-',
-
+        '--': '-', '---': '-', '‐': '-', '‑': '-', '‒': '-', '−': '-',
+        '–': '-', '—': '-', '―': '-',
+        
         # Smart quotes and apostrophes
-        '‘': "'", '’': "'", '“': '"', '”': '"',
-        '«': '"', '»': '"', '´': "'", '`': "'",
-
+        '‘': "'", '’': "'", '“': '"', '”': '"', '´': "'", '`': "'",
+        '«': '"', '»': '"', '″': '"', '‹': "'", '›': "'",
+        
         # Common mis-encodings from your examples
-        'â': '-', 'â': '-', 'â ̄': ' ',
-        'â': '-', 'â': '-', 'â ̄': ' ',
+        'â\x80\x94': '-', 'â\x80\x9c': '"', 'â\x80\x9d': '"',
+        'â\x80\x99': "'", 'â\x80\x9s': "'", 'â\x80\x91': '-',
+        'â\x80 \u0304': ' ', 'â\x82\x82': '₂', 'â\x82\x88': '₈',
+        'â\x80\x93': '-', 'â\x80': '', 'â': '',
+        
+        # Mathematical and chemical notation fixes
         'â\x80\x94': '-', 'â\x80\x9c': '"', 'â\x80\x9d': '"',
-        'â\x80\x91': '-', 'â\x80 \u0304': '',
-        'â\x82\x82': '²', 'â\x82\x88': '⁸',
-
-        # Spaces
-        ' ': ' ', ' ': ' ', ' ': ' ', '': '', '﻿': '',
-
-        # Mathematical symbols
-        '×': '×', '÷': '÷', '±': '±', 'µ': 'µ', '°': '°',
-
-        # Greek letters (keep as-is for display)
-        'α': 'α', 'β': 'β', 'γ': 'γ', 'δ': 'δ',
-        'ε': 'ε', 'ζ': 'ζ', 'η': 'η', 'θ': 'θ',
-        # ... include all Greek letters you want to preserve
+        'â\x80\x99': "'", 'â\x80\x91': '-', 'â\x80 \u0304': '',
+        'â\x82\x82': '²', 'â\x82\x88': '⁸', 'â': '',
+        
+        # Spaces and invisible characters
+        '\u200b': '', '\ufeff': '', '\u202a': '', '\u202c': '',
+        '\u200e': '', '\u200f': '', ' ': ' ', ' ': ' ', ' ': ' ',
+        '': '', '﻿': '',
     }
 
     for old, new in replacements.items():
         normalized = normalized.replace(old, new)
 
-    # Remove any remaining problematic control characters but preserve readable Unicode
-    normalized = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', normalized)
+    # Fix common chemical notation patterns
+    chemical_fixes = {
+        'SiOâ\x82\x82': 'SiO₂', 'Oâ\x82\x82': 'O₂', 'COâ\x82\x82': 'CO₂',
+        'Alâ\x82\x82Oâ\x82\x83': 'Al₂O₃', 'FeO': 'FeO', 'MgO': 'MgO',
+        'TiOâ\x82\x82': 'TiO₂', 'CaO': 'CaO', 'Na₂O': 'Na₂O', 'K₂O': 'K₂O',
+        'H₂O': 'H₂O', 'CO₂': 'CO₂', 'SO₂': 'SO₂',
+    }
+    
+    for old, new in chemical_fixes.items():
+        normalized = normalized.replace(old, new)
 
+    # Remove any remaining problematic control characters
+    normalized = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', normalized)
+    
     return normalized
 
 def normalize_text_for_pdf(text):
-    """Normalize text specifically for PDF generation"""
+    """Normalize text specifically for PDF generation with strict HTML cleaning"""
     if not text:
         return text
 
     # First apply display normalization
     text = normalize_text_for_display(text)
-
+    
     # Additional PDF-specific replacements
     pdf_replacements = {
         # Convert Greek letters to text for PDF compatibility
@@ -898,50 +908,134 @@ def normalize_text_for_pdf(text):
         'ρ': 'rho', 'σ': 'sigma', 'τ': 'tau', 'υ': 'upsilon',
         'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
         'Α': 'Alpha', 'Β': 'Beta', 'Γ': 'Gamma', 'Δ': 'Delta',
-        # ... etc
+        'Ε': 'Epsilon', 'Ζ': 'Zeta', 'Η': 'Eta', 'Θ': 'Theta',
+        'Ι': 'Iota', 'Κ': 'Kappa', 'Λ': 'Lambda', 'Μ': 'Mu',
+        'Ν': 'Nu', 'Ξ': 'Xi', 'Ο': 'Omicron', 'Π': 'Pi',
+        'Ρ': 'Rho', 'Σ': 'Sigma', 'Τ': 'Tau', 'Υ': 'Upsilon',
+        'Φ': 'Phi', 'Χ': 'Chi', 'Ψ': 'Psi', 'Ω': 'Omega',
+        
+        # Fix common formatting issues
+        '<br>': '\n', '<br/>': '\n', '<br />': '\n',
+        '<b>': '**', '</b>': '**', '<i>': '*', '</i>': '*',
+        '<em>': '*', '</em>': '*', '<strong>': '**', '</strong>': '**',
+        '<p>': '\n', '</p>': '\n', '<para>': '', '</para>': '',
     }
 
     for old, new in pdf_replacements.items():
         text = text.replace(old, new)
 
+    # Clean up any remaining HTML tags
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    # Fix multiple newlines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
     return text
+
+def clean_html_for_reportlab(text):
+    """Specifically clean HTML for ReportLab's Paragraph parser"""
+    if not text:
+        return text
+    
+    # First normalize
+    text = normalize_text_for_pdf(text)
+    
+    # Remove any remaining problematic HTML constructs
+    text = re.sub(r'<br\s*/?>', '\n', text)  # Convert <br> to newlines
+    text = re.sub(r'<[^>]+>', '', text)  # Remove all other HTML tags
+    
+    # Fix common issues that break ReportLab
+    text = re.sub(r'&[^;]+;', '', text)  # Remove HTML entities
+    text = re.sub(r'\xa0', ' ', text)  # Replace non-breaking spaces
+    
+    # Ensure proper paragraph separation
+    text = re.sub(r'\n\s*\n', '\n\n', text)
+    
+    return text.strip()
+
 
 def convert_markdown_tables_to_simple_text(text):
     """Convert markdown tables to simple text format for PDF"""
-    table_pattern = r'(\|.*\|\s*\n\|[-:\s|]+\|\s*\n(?:\|.*\|\s*\n)*)'
-
+    # First normalize the text
+    text = normalize_text_for_pdf(text)
+    
+    # Handle tables - convert to simple text format
+    table_pattern = r'(\|.*\|[\s\n]*\|[-:\s|]+\|[\s\n]*(?:\|.*\|[\s\n]*)+)'
+    
     def replace_table(match):
         table_text = match.group(0)
         lines = [line.strip() for line in table_text.split('\n') if line.strip().startswith('|')]
+        
         if len(lines) < 2:
             return table_text
-
+        
         table_data = []
         for line in lines:
-            cells = [cell.strip() for cell in line.split('|')[1:-1]]
+            cells = [cell.strip() for cell in line.split('|')[1:-1]]  # Remove empty first/last
             table_data.append(cells)
-
-        if all(cell.replace('-', '').replace(':', '').replace(' ', '') == '' for cell in table_data[1]):
+        
+        # Remove separator line if it exists
+        if len(table_data) > 1 and all(cell.replace('-', '').replace(':', '').replace(' ', '') == '' for cell in table_data[1]):
             table_data.pop(1)
-
+        
+        # Find max width for each column
+        if not table_data:
+            return table_text
+            
+        col_widths = [0] * len(table_data[0])
+        for row in table_data:
+            for i, cell in enumerate(row):
+                if i < len(col_widths):
+                    col_widths[i] = max(col_widths[i], len(cell))
+        
+        # Build simple text table
         result = []
         for row in table_data:
-            result.append(' | '.join(row))
+            row_text = []
+            for i, cell in enumerate(row):
+                if i < len(col_widths):
+                    row_text.append(cell.ljust(col_widths[i]))
+            result.append(' | '.join(row_text))
+        
         return '\n'.join(result) + '\n\n'
-
+    
     return re.sub(table_pattern, replace_table, text, flags=re.MULTILINE)
 
 def draw_paragraph(pdf_canvas, text_content, style, y_pos, page_width, left_margin=0.75*inch, right_margin=0.75*inch):
+    """Safe paragraph drawing with comprehensive text cleaning"""
     available_width = page_width - left_margin - right_margin
-    text_content = normalize_text_for_display(text_content)
+    
+    # Comprehensive cleaning for ReportLab
+    text_content = clean_html_for_reportlab(text_content)
+    text_content = convert_markdown_tables_to_simple_text(text_content)
+    
+    # Replace newlines with <br/> for Paragraph, but only after cleaning
     text_content = text_content.replace('\n', '<br/>')
-    para = Paragraph(text_content, style)
-    w, h = para.wrapOn(pdf_canvas, available_width, 0)
-    if y_pos - h < 0.75*inch:
-        pdf_canvas.showPage()
-        y_pos = A4[1] - 0.75*inch
-    para.drawOn(pdf_canvas, left_margin, y_pos - h)
-    return y_pos - h - style.spaceAfter
+    
+    try:
+        para = Paragraph(text_content, style)
+        w, h = para.wrapOn(pdf_canvas, available_width, 0)
+        
+        if y_pos - h < 0.75*inch:
+            pdf_canvas.showPage()
+            y_pos = A4[1] - 0.75*inch
+        
+        para.drawOn(pdf_canvas, left_margin, y_pos - h)
+        return y_pos - h - style.spaceAfter
+        
+    except Exception as e:
+        logging.error(f"Error drawing paragraph: {e}")
+        # Fallback: draw simple text
+        pdf_canvas.setFont("Helvetica", 10)
+        lines = text_content.replace('<br/>', '\n').split('\n')
+        for line in lines:
+            if y_pos < 1.5*inch:
+                pdf_canvas.showPage()
+                y_pos = A4[1] - 0.75*inch
+            pdf_canvas.drawString(left_margin, y_pos, line[:100])  # Limit line length
+            y_pos -= 12
+        return y_pos
+
 
 # API Endpoints
 
@@ -1347,28 +1441,28 @@ def generate_report():
     c = conn.cursor()
     c.execute("SELECT claim_text FROM claims WHERE analysis_id=? AND ordinal=?", (analysis_id, int(claim_idx)))
     row = c.fetchone()
-    
+
     if not row:
         conn.close()
         return Response(json.dumps({"error": "Claim not found"}), mimetype='application/json', status=404)
-    
+
     claim_text = row[0]
 
     # Get question_text from model_cache using claim_hash
     claim_hash = sha256_str(claim_text.strip().lower())
     c.execute("SELECT questions_json FROM model_cache WHERE claim_hash=?", (claim_hash,))
     questions_row = c.fetchone()
-    
+
     if not questions_row:
         conn.close()
         return Response(json.dumps({"error": "Questions not found for this claim. Please generate model verdict first."}), mimetype='application/json', status=400)
-    
+
     questions = json_loads(questions_row[0], [])
-    
+
     if question_idx >= len(questions):
         conn.close()
         return Response(json.dumps({"error": f"Question index {question_idx} out of range. Only {len(questions)} questions available."}), mimetype='application/json', status=400)
-    
+
     question_text = questions[question_idx]
     conn.close()
 
@@ -1406,16 +1500,28 @@ def generate_report():
     prompt = f'''
 You are an AI researcher writing a short, evidence-based report (maximum 1000 words). Your task is to investigate the research question in relation to the claim using verifiable scientific knowledge. Use the article context to ground your analysis where helpful. Clearly explain how the answer to the research question supports, contradicts, or contextualizes the claim. Provide concise reasoning and avoid speculation.
 
+**CRITICAL FORMATTING REQUIREMENTS:**
+- Use ONLY plain text with basic Markdown for formatting
+- NO HTML tags of any kind (no <br>, <b>, <i>, etc.)
+- NO complex tables - use simple text descriptions instead
+- Use **bold** for emphasis, not HTML
+- Use simple bullet points with * or -
+- Separate sections with clear headings using ##
+
 **Structure:**
 
-1. **Introduction:** Briefly state the question's relevance to the claim.
+## 1. Introduction
+Briefly state the question's relevance to the claim.
 
-2. **Analysis:** Answer the research question directly, citing evidence or established principles.
+## 2. Analysis  
+Answer the research question directly, citing evidence or established principles.
 
-3. **Conclusion:** Summarize how the analysis impacts the validity of the original claim.
+## 3. Conclusion
+Summarize how the analysis impacts the validity of the original claim.
 
-4. **Sources:** List up to 3 relevant sources with clickable full URLs. Prefer recent, peer-reviewed sources.
-
+## 4. Sources
+List up to 3 relevant sources with full URLs.
+    
 ---
 
 **Article Context:**
@@ -1443,7 +1549,7 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
         try:
             response = call_openrouter(prompt, stream=True)
             response.raise_for_status()
-            
+
             for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
                 if chunk:
                     lines = chunk.split('\n')
@@ -1463,7 +1569,7 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
                                         yield f"data: {json.dumps({'content': normalized_content})}\n\n"
                             except json.JSONDecodeError:
                                 continue
-                                
+
         except Exception as e:
             logging.error(f"Streaming error: {e}")
             yield f"data: {json.dumps({'error': 'Streaming failed'})}\n\n"
@@ -1474,7 +1580,7 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
                     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
                     c = conn.cursor()
                     c.execute("""
-                        INSERT OR REPLACE INTO report_cache 
+                        INSERT OR REPLACE INTO report_cache
                         (rq_hash, question_text, report_text, updated_at)
                         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
                     """, (rq_hash, question_text, full_report_content))  # These variables are now defined in the outer scope
@@ -1482,7 +1588,7 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
                     conn.close()
                 except Exception as db_error:
                     logging.error(f"Cache error: {db_error}")
-        
+
         yield "data: [DONE]\n\n"
 
     return Response(stream_response(), mimetype='text/event-stream')
