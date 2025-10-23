@@ -1,3 +1,80 @@
+@app.route("/api/verify-external", methods=["POST"])
+def verify_external():
+    claim_idx = request.json.get("claim_idx")
+    current_article_id = session.get('current_article_id')
+    
+    if not current_article_id:
+        return jsonify({"error": "Analysis context missing. Please re-run analysis."}), 400
+
+    article_cache_data = get_analysis(current_article_id)
+    if not article_cache_data:
+        return jsonify({"error": "Analysis session expired or not found."}), 400
+
+    claims_data_in_cache = article_cache_data.get('claims_data', [])
+    use_papers = article_cache_data.get('use_papers', False)
+
+    if claim_idx is None or not isinstance(claim_idx, int) or claim_idx >= len(claims_data_in_cache):
+        return jsonify({"error": "Invalid claim index or analysis data missing."}), 400
+
+    claim_data_in_cache = claims_data_in_cache[claim_idx]
+    claim_text = claim_data_in_cache['text']
+
+    # ✅ CHECK GLOBAL CACHE FOR EXTERNAL VERDICTS FIRST
+    global_cache_hash = article_cache_data.get('global_cache_hash')
+    analysis_mode = article_cache_data.get('mode')
+    
+    if global_cache_hash and article_cache_data.get('cached_from_global'):
+        cached_complete = get_global_cache_complete(global_cache_hash, analysis_mode)
+        if cached_complete and cached_complete.get('external_sources'):
+            external_dict = cached_complete['external_sources']
+            if isinstance(external_dict, dict) and str(claim_idx) in external_dict:
+                external_data = external_dict[str(claim_idx)]
+                logging.info(f"✅ USING GLOBALLY CACHED external verdict for claim {claim_idx}")
+                
+                # Also update session cache for consistency
+                claim_data_in_cache["external_verdict"] = external_data.get('verdict', '')
+                claim_data_in_cache["sources"] = external_data.get('sources', [])
+                store_analysis(current_article_id, article_cache_data)
+                
+                return jsonify({
+                    "verdict": external_data.get('verdict', ''),
+                    "sources": external_data.get('sources', []),
+                    "cached": True,
+                    "global_cache": True
+                })
+
+    # Check if we already have external verification results in session
+    if "external_verdict" in claim_data_in_cache and "sources" in claim_data_in_cache:
+        logging.info(f"Using cached external verification for claim {claim_idx}")
+        return jsonify({
+            "verdict": claim_data_in_cache["external_verdict"],
+            "sources": claim_data_in_cache["sources"],
+            "cached": True
+        })
+
+    # ... REST OF YOUR EXISTING verify_external() CODE ...
+
+    # ✅ AFTER GENERATING EXTERNAL VERDICT, STORE IN GLOBAL CACHE
+    if global_cache_hash and "external_verdict" in claim_data_in_cache and "sources" in claim_data_in_cache:
+        update_global_cache_with_external(
+            global_cache_hash,
+            analysis_mode,
+            claim_idx,
+            {
+                "verdict": claim_data_in_cache["external_verdict"],
+                "sources": claim_data_in_cache["sources"]
+            }
+        )
+        logging.info(f"✅ Stored external verdict in global cache for claim {claim_idx}")
+
+    return jsonify({
+        "verdict": external_verdict,
+        "sources": sources,
+        "cached": False,
+        "global_cache": bool(global_cache_hash)
+    })
+
+
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
     # ... existing code ...
