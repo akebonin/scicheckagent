@@ -1,3 +1,18 @@
+@app.route("/api/analyze", methods=["POST"])
+def analyze():
+    # ... existing code ...
+    
+    claims_list = [c for c in claims_list if len(c) > 10 and not c.lower().startswith(("output:", "text:", "no explicit claims found"))]
+
+    # RE-RETRIEVE and UPDATE the session data
+    article_cache_data = get_analysis(article_id)
+    if article_cache_data:
+        article_cache_data["claims_data"] = [{"text": claim_text} for claim_text in claims_list]
+        store_analysis(article_id, article_cache_data)  # ← Store with claims data
+    
+    return jsonify({"claims": claims_list})
+
+
 // In your autoLoadClaimDetails function, modify to use cached data when available
 async function autoLoadClaimDetails(claims) {
     const promises = claims.map(async (claim, index) => {
