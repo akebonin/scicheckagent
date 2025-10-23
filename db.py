@@ -2,7 +2,6 @@ from flask import Flask, request, render_template, send_file, Response, session,
 from dotenv import load_dotenv
 import os
 import requests
-import trafilatura  # Not directly used in the current version for extraction, but kept as in original
 import io
 import json
 from urllib.parse import quote_plus
@@ -16,188 +15,165 @@ import logging
 import re
 import uuid
 import time
-from bs4 import BeautifulSoup  # Import BeautifulSoup for URL content extraction
+from bs4 import BeautifulSoup
 import sqlite3
 from datetime import datetime, timedelta
 import base64
 from PIL import Image
 import pytesseract
-from openai import OpenAI
 from moviepy.editor import VideoFileClip
 import yt_dlp
 import unicodedata
-import html
 import hashlib
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Load environment variables
-# Ensure this path is correct for your PythonAnywhere setup
 load_dotenv(dotenv_path="/home/scicheckagent/mysite/.env")
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
 if not app.secret_key:
     app.secret_key = os.urandom(24)
-    logging.warning("FLASK_SECRET_KEY not set. Using a random key for development. Set a strong key in production!")
+    logging.warning("FLASK_SECRET_KEY not set. Using a random key for development.")
 
-# Database setup for session storage
+# Utility functions
+def sha256_str(s: str) -> str:
+    return hashlib.sha256((s or "").encode("utf-8")).hexdigest()
+
+def json_dumps(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+def json_loads(s: str, fallback):
+    try:
+        return json.loads(s) if s else fallback
+    except Exception:
+        return fallback
+
+def new_analysis_id() -> str:
+    return str(uuid.uuid4())
+
+# Database setup for normalized storage
 def init_db():
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS analysis_sessions (
-        session_id TEXT PRIMARY KEY,
-        article_data TEXT NOT NULL,
+
+    # Workspace pointer only
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS analyses (
+        analysis_id TEXT PRIMARY KEY,
+        mode TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
-    ''')
+    """)
 
-    c.execute('''
+    # Pasted text cache
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS pasted_texts (
+        text_hash TEXT PRIMARY KEY,
+        text_content TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # Article cache (URL -> text)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS article_cache (
+        url_hash TEXT PRIMARY KEY,
+        url TEXT,
+        raw_html TEXT,
+        article_text TEXT,
+        etag TEXT,
+        last_modified TEXT,
+        fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_article_cache_url ON article_cache(url)")
+
+    # Media cache
+    c.execute("""
     CREATE TABLE IF NOT EXISTS media_cache (
         file_hash TEXT PRIMARY KEY,
         media_type TEXT NOT NULL,
         extracted_text TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
-    ''')
+    """)
 
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS external_sources_cache (
-        cache_key TEXT PRIMARY KEY,
-        sources_data TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    # Claims per analysis
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS claims (
+        claim_id TEXT PRIMARY KEY,
+        analysis_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        claim_text TEXT NOT NULL,
+        claim_hash TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(analysis_id) REFERENCES analyses(analysis_id) ON DELETE CASCADE
     )
-    ''')
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_claims_analysis ON claims(analysis_id, ordinal)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_claims_hash ON claims(claim_hash)")
 
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS global_content_cache (
-            content_hash TEXT PRIMARY KEY,
-            analysis_mode TEXT NOT NULL,
-            claims_data TEXT NOT NULL,
-            model_verdicts TEXT NOT NULL,
-            external_sources TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            access_count INTEGER DEFAULT 1,
-            last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    # Model verdict + questions + keywords (by claim_hash)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS model_cache (
+        claim_hash TEXT PRIMARY KEY,
+        verdict TEXT,
+        questions_json TEXT,
+        keywords_json TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
-    conn.commit()
-    conn.close()
+    # External verdict + sources (by claim_hash)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS external_cache (
+        claim_hash TEXT PRIMARY KEY,
+        verdict TEXT,
+        sources_json TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
-def get_global_cache(content_hash, analysis_mode):
-    """Get cached analysis for content + mode combination"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT claims_data, model_verdicts, external_sources, access_count
-        FROM global_content_cache
-        WHERE content_hash = ? AND analysis_mode = ?
-    ''', (content_hash, analysis_mode))
-    result = c.fetchone()
-    conn.close()
-
-    if result:
-        # Update access count and timestamp
-        update_global_cache_access(content_hash, analysis_mode)
-        return {
-            'claims_data': json.loads(result[0]),
-            'model_verdicts': json.loads(result[1]),
-            'external_sources': json.loads(result[2]),
-            'access_count': result[3]
-        }
-    return None
-
-def store_global_cache(content_hash, analysis_mode, claims_data, model_verdicts, external_sources):
-    """Store or update global cache"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-
-    c.execute('''
-        INSERT OR REPLACE INTO global_content_cache
-        (content_hash, analysis_mode, claims_data, model_verdicts, external_sources, access_count, last_accessed)
-        VALUES (?, ?, ?, ?, ?,
-                COALESCE((SELECT access_count + 1 FROM global_content_cache WHERE content_hash = ? AND analysis_mode = ?), 1),
-                ?)
-    ''', (content_hash, analysis_mode, json.dumps(claims_data), json.dumps(model_verdicts),
-          json.dumps(external_sources), content_hash, analysis_mode, datetime.now()))
+    # Report cache (claim+question -> report text)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS report_cache (
+        rq_hash TEXT PRIMARY KEY,
+        question_text TEXT,
+        report_text TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
     conn.commit()
     conn.close()
 
-def update_global_cache_access(content_hash, analysis_mode):
-    """Update access count and timestamp for global cache"""
+def save_claims_for_analysis(analysis_id: str, claims_list: list):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
-    c.execute('''
-        UPDATE global_content_cache
-        SET access_count = access_count + 1, last_accessed = ?
-        WHERE content_hash = ? AND analysis_mode = ?
-    ''', (datetime.now(), content_hash, analysis_mode))
+    c.execute("DELETE FROM claims WHERE analysis_id=?", (analysis_id,))
+
+    for idx, claim_text in enumerate(claims_list):
+        claim_hash = sha256_str(claim_text.strip().lower())
+        claim_id = sha256_str(f"{analysis_id}|{idx}|{claim_text.strip()}")
+        c.execute("""
+        INSERT OR REPLACE INTO claims (claim_id, analysis_id, ordinal, claim_text, claim_hash)
+        VALUES (?, ?, ?, ?, ?)
+        """, (claim_id, analysis_id, idx, claim_text.strip(), claim_hash))
+
     conn.commit()
     conn.close()
 
-# Add this function to store session data in your existing database
-def store_user_session(user_session_id, data):
+def get_claims_for_analysis(analysis_id: str):
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS user_sessions (
-            session_id TEXT PRIMARY KEY,
-            session_data TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    c.execute('''
-        INSERT OR REPLACE INTO user_sessions (session_id, session_data, last_accessed)
-        VALUES (?, ?, ?)
-    ''', (user_session_id, json.dumps(data), datetime.now()))
-    conn.commit()
+    c.execute("SELECT claim_text FROM claims WHERE analysis_id=? ORDER BY ordinal", (analysis_id,))
+    rows = c.fetchall()
     conn.close()
-
-def get_user_session(user_session_id):
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('SELECT session_data FROM user_sessions WHERE session_id = ?', (user_session_id,))
-    result = c.fetchone()
-    conn.close()
-    return json.loads(result[0]) if result else None
-
-def store_analysis(session_id, article_data):
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('''
-    INSERT OR REPLACE INTO analysis_sessions
-    (session_id, article_data, last_accessed)
-    VALUES (?, ?, ?)
-    ''', (session_id, json.dumps(article_data), datetime.now()))
-    conn.commit()
-    conn.close()
-
-def get_analysis(session_id):
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('''
-    SELECT article_data FROM analysis_sessions
-    WHERE session_id = ? AND last_accessed > ?
-    ''', (session_id, datetime.now() - timedelta(hours=24)))
-    result = c.fetchone()
-    conn.close()
-    return json.loads(result[0]) if result else None
-
-def update_access_time(session_id):
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('''
-    UPDATE analysis_sessions SET last_accessed = ?
-    WHERE session_id = ?
-    ''', (datetime.now(), session_id))
-    conn.commit()
-    conn.close()
+    return [row[0] for row in rows]
 
 def compute_file_hash(file_path):
     """Compute SHA256 hash of a file"""
@@ -206,10 +182,6 @@ def compute_file_hash(file_path):
         for chunk in iter(lambda: f.read(4096), b""):
             hash_sha256.update(chunk)
     return hash_sha256.hexdigest()
-
-def compute_content_hash(content):
-    """Compute SHA256 hash of text content"""
-    return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 def get_cached_media(file_hash):
     """Get cached media extraction result"""
@@ -224,180 +196,58 @@ def store_media_cache(file_hash, media_type, extracted_text):
     """Store media extraction result in cache"""
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
-    c.execute('''
-        INSERT OR REPLACE INTO media_cache (file_hash, media_type, extracted_text)
-        VALUES (?, ?, ?)
-    ''', (file_hash, media_type, extracted_text))
+    c.execute("""
+    INSERT OR REPLACE INTO media_cache (file_hash, media_type, extracted_text)
+    VALUES (?, ?, ?)
+    """, (file_hash, media_type, extracted_text))
     conn.commit()
     conn.close()
-
-def get_cached_external_sources(cache_key):
-    """Get cached external sources"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('SELECT sources_data FROM external_sources_cache WHERE cache_key = ?', (cache_key,))
-    result = c.fetchone()
-    conn.close()
-    return json.loads(result[0]) if result else None
-
-def store_external_sources_cache(cache_key, sources_data):
-    """Store external sources in cache"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('''
-        INSERT OR REPLACE INTO external_sources_cache (cache_key, sources_data)
-        VALUES (?, ?)
-    ''', (cache_key, json.dumps(sources_data)))
-    conn.commit()
-    conn.close()
-
-def update_global_cache_with_verdicts(content_hash, analysis_mode, claim_idx, verdict_data):
-    """Update global cache with model verdicts and questions"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-
-    # Get current cache data
-    c.execute('SELECT model_verdicts FROM global_content_cache WHERE content_hash = ? AND analysis_mode = ?',
-              (content_hash, analysis_mode))
-    result = c.fetchone()
-
-    if result:
-        current_verdicts = json.loads(result[0]) if result[0] else {}
-        if not isinstance(current_verdicts, dict):
-            current_verdicts = {}
-
-        # Update with new verdict data
-        current_verdicts[str(claim_idx)] = verdict_data
-
-        # Update the cache
-        c.execute('''
-            UPDATE global_content_cache
-            SET model_verdicts = ?, last_accessed = ?
-            WHERE content_hash = ? AND analysis_mode = ?
-        ''', (json.dumps(current_verdicts), datetime.now(), content_hash, analysis_mode))
-
-        conn.commit()
-        logging.info(f"✅ Updated global cache with model verdict for claim {claim_idx}")
-
-    conn.close()
-
-def update_global_cache_with_external(content_hash, analysis_mode, claim_idx, external_data):
-    """Update global cache with external verification results"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-
-    # Get current cache data
-    c.execute('SELECT external_sources FROM global_content_cache WHERE content_hash = ? AND analysis_mode = ?',
-              (content_hash, analysis_mode))
-    result = c.fetchone()
-
-    if result:
-        current_external = json.loads(result[0]) if result[0] else {}
-        if not isinstance(current_external, dict):
-            current_external = {}
-
-        # Update with new external data
-        current_external[str(claim_idx)] = external_data
-
-        # Update the cache
-        c.execute('''
-            UPDATE global_content_cache
-            SET external_sources = ?, last_accessed = ?
-            WHERE content_hash = ? AND analysis_mode = ?
-        ''', (json.dumps(current_external), datetime.now(), content_hash, analysis_mode))
-
-        conn.commit()
-        logging.info(f"✅ Updated global cache with external sources for claim {claim_idx}")
-
-    conn.close()
-
-def update_global_cache_with_report(content_hash, analysis_mode, claim_idx, question_idx, report_data):
-    """Update global cache with research reports"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-
-    # Get current cache data
-    c.execute('SELECT external_sources FROM global_content_cache WHERE content_hash = ? AND analysis_mode = ?',
-              (content_hash, analysis_mode))
-    result = c.fetchone()
-
-    if result:
-        current_external = json.loads(result[0]) if result[0] else {}
-        if not isinstance(current_external, dict):
-            current_external = {}
-
-        # Create report key and store
-        report_key = f"claim_{claim_idx}_question_{question_idx}"
-        current_external[report_key] = report_data
-
-        # Update the cache
-        c.execute('''
-            UPDATE global_content_cache
-            SET external_sources = ?, last_accessed = ?
-            WHERE content_hash = ? AND analysis_mode = ?
-        ''', (json.dumps(current_external), datetime.now(), content_hash, analysis_mode))
-
-        conn.commit()
-        logging.info(f"✅ Updated global cache with report for claim {claim_idx}, question {question_idx}")
-
-    conn.close()
-
-def get_global_cache_complete(content_hash, analysis_mode):
-    """Get complete cached analysis including all components"""
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT claims_data, model_verdicts, external_sources, access_count
-        FROM global_content_cache
-        WHERE content_hash = ? AND analysis_mode = ?
-    ''', (content_hash, analysis_mode))
-    result = c.fetchone()
-    conn.close()
-
-    if result:
-        # Update access count
-        update_global_cache_access(content_hash, analysis_mode)
-
-        return {
-            'claims_data': json.loads(result[0]),
-            'model_verdicts': json.loads(result[1]) if result[1] else {},
-            'external_sources': json.loads(result[2]) if result[2] else {},
-            'access_count': result[3]
-        }
-    return None
 
 def cleanup_old_cache():
     """Clean up old cache entries to prevent database bloat"""
     conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
     c = conn.cursor()
-
     try:
         # Clean up media cache older than 30 days
         c.execute('DELETE FROM media_cache WHERE created_at < ?',
-                  (datetime.now() - timedelta(days=30),))
+                 (datetime.now() - timedelta(days=30),))
         media_deleted = c.rowcount
 
-        # Clean up external sources cache older than 30 days
-        c.execute('DELETE FROM external_sources_cache WHERE created_at < ?',
-                  (datetime.now() - timedelta(days=30),))
-        sources_deleted = c.rowcount
+        # Clean up analyses older than 7 days
+        c.execute('DELETE FROM analyses WHERE last_accessed < ?',
+                 (datetime.now() - timedelta(days=7),))
+        analyses_deleted = c.rowcount
 
-        # Clean up analysis sessions older than 7 days
-        c.execute('DELETE FROM analysis_sessions WHERE last_accessed < ?',
-                  (datetime.now() - timedelta(days=7),))
-        sessions_deleted = c.rowcount
+        # Clean up pasted_texts older than 30 days
+        c.execute('DELETE FROM pasted_texts WHERE created_at < ?',
+                 (datetime.now() - timedelta(days=30),))
+        texts_deleted = c.rowcount
 
-        # ✅ Keep GLOBAL content cache for 90 DAYS (viral articles)
-        c.execute('DELETE FROM global_content_cache WHERE last_accessed < ?',
+        # Clean up article_cache older than 30 days
+        c.execute('DELETE FROM article_cache WHERE fetched_at < ?',
+                 (datetime.now() - timedelta(days=30),))
+        articles_deleted = c.rowcount
+
+        # Clean up model_cache older than 90 days
+        c.execute('DELETE FROM model_cache WHERE updated_at < ?',
                  (datetime.now() - timedelta(days=90),))
-        global_cache_deleted = c.rowcount
+        model_deleted = c.rowcount
+
+        # Clean up external_cache older than 90 days
+        c.execute('DELETE FROM external_cache WHERE updated_at < ?',
+                 (datetime.now() - timedelta(days=90),))
+        external_deleted = c.rowcount
+
+        # Clean up report_cache older than 90 days
+        c.execute('DELETE FROM report_cache WHERE updated_at < ?',
+                 (datetime.now() - timedelta(days=90),))
+        report_deleted = c.rowcount
 
         conn.commit()
-
-        logging.info(f"Cache cleanup completed: {media_deleted} media, {sources_deleted} sources, {sessions_deleted} sessions removed")
+        logging.info(f"Cache cleanup completed: {media_deleted} media, {analyses_deleted} analyses, {texts_deleted} texts, {articles_deleted} articles, {model_deleted} model, {external_deleted} external, {report_deleted} reports removed")
 
         # Optional: Run VACUUM if significant space was freed
-        if (media_deleted + sources_deleted + sessions_deleted + global_cache_deleted) > 50:
+        if (media_deleted + analyses_deleted + texts_deleted + articles_deleted + model_deleted + external_deleted + report_deleted) > 50:
             c.execute('VACUUM')
             logging.info("Database vacuum performed")
 
@@ -411,47 +261,16 @@ def cleanup_old_cache():
 # Initialize database on startup
 init_db()
 
-
-def start_cleanup_thread():
-    """Start a background thread for periodic cleanup with error handling"""
-    import threading
-    import time
-
-    def cleanup_worker():
-        # Wait 1 minute after startup
-        time.sleep(60)
-
-        while True:
-            try:
-                logging.info("Running scheduled cache cleanup...")
-                cleanup_old_cache()
-                logging.info("Scheduled cache cleanup completed")
-
-                # Sleep for 24 hours instead of checking every hour
-                time.sleep(24 * 60 * 60)  # 24 hours
-
-            except Exception as e:
-                logging.error(f"Cleanup worker error: {e}")
-                # Sleep for 1 hour on error, then retry
-                time.sleep(60 * 60)
-
-    thread = threading.Thread(target=cleanup_worker, daemon=True)
-    thread.name = "CacheCleanupThread"
-    thread.start()
-    logging.info("Cache cleanup thread started (runs once per day)")
-
-# API Configuration  ← This is your existing line - keep it here
-OR_URL = "https://openrouter.ai/api/v1/chat/completions"
-
 # API Configuration
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 WHISPER_API_KEY = os.getenv("WHISPER_API_KEY")
+
 if not WHISPER_API_KEY:
     logging.error("WHISPER_API_KEY not set.")
     raise ValueError("WHISPER_API_KEY is not set in environment variables.")
 
-# Base prompt templates for consolidation
+# Base prompt templates
 BASE_EXTRACTION_RULES = '''
 **Strict rules:**
 - ONLY include claims that appear EXPLICITLY in the text.
@@ -534,9 +353,6 @@ Claim: "{{claim}}"
 }
 
 # Helper functions
-
-
-
 def call_openrouter(prompt, stream=False, temperature=0.0, json_mode=False):
     """Calls the OpenRouter API, supports streaming and JSON mode."""
     if not OPENROUTER_API_KEY:
@@ -548,7 +364,7 @@ def call_openrouter(prompt, stream=False, temperature=0.0, json_mode=False):
     }
 
     payload = {
-        "model": "google/gemini-2.0-flash-exp:free",
+        "model": "openai/gpt-oss-20b:free",
         "messages": [{"role": "user", "content": prompt}],
         "stream": stream,
         "temperature": temperature
@@ -558,10 +374,8 @@ def call_openrouter(prompt, stream=False, temperature=0.0, json_mode=False):
         payload["response_format"] = {"type": "json_object"}
 
     try:
-        logging.info(f"OpenRouter request payload: {json.dumps(payload, indent=2)}")
         response = requests.post(OR_URL, headers=headers, json=payload, stream=stream, timeout=90)
         response.raise_for_status()
-        logging.info(f"OpenRouter response status: {response.status_code}")
         return response
     except requests.exceptions.RequestException as e:
         logging.error(f"OpenRouter API call failed: {e}")
@@ -583,7 +397,7 @@ def extract_article_from_url(url):
         # Prioritize common article content selectors
         content_selectors = [
             'article',
-            '.article-body-commercial-selector',  # Guardian-specific example
+            '.article-body-commercial-selector',
             'main',
             '.article-content',
             '.post-content',
@@ -597,36 +411,30 @@ def extract_article_from_url(url):
         for selector in content_selectors:
             elements = soup.select(selector)
             if elements:
-                # Concatenate text from all found elements of this selector
                 current_text = ' '.join(elem.get_text(separator=' ', strip=True) for elem in elements)
-                if len(current_text) > 200:  # If we get significant content, use it
+                if len(current_text) > 200:
                     logging.info(f"BeautifulSoup extracted {len(current_text)} characters using selector: {selector}")
                     return current_text
-                elif len(current_text) > len(text):  # Keep the longest text found so far
+                elif len(current_text) > len(text):
                     text = current_text
 
         # Fallback if specific selectors didn't yield much
-        if len(text) > 50:  # If some text was found by more specific selectors, return it
-            logging.info(f"Returning partial BeautifulSoup text: {text[:100]}...")
+        if len(text) > 50:
             return text
 
         logging.info("Falling back to raw HTML body extraction if no specific content found.")
         body = soup.find('body')
         if body:
-            # Remove scripts, styles, navs, headers, footers for cleaner text
             for elem in body(['script', 'style', 'nav', 'header', 'footer', 'aside', '.sidebar', '.comments', '#comments']):
                 elem.decompose()
             raw_body_text = ' '.join(body.get_text(separator=' ', strip=True).split())
             if len(raw_body_text) > 200:
-                logging.info(f"Raw HTML body extraction yielded {len(raw_body_text)} characters.")
                 return raw_body_text
             elif len(raw_body_text) > 50:
-                logging.info(f"Raw HTML body extraction yielded {len(raw_body_text)} characters (may be short).")
                 return raw_body_text
 
         logging.warning("BeautifulSoup extracted insufficient content from URL.")
-        return ""  # Return empty string if no significant content could be extracted
-
+        return ""
     except requests.exceptions.RequestException as e:
         logging.error(f"Network or HTTP error fetching URL {url}: {e}")
         return ""
@@ -647,12 +455,78 @@ def generate_questions_for_claim(claim):
         logging.error(f"Failed to generate questions for claim '{claim}': {e}")
         return []
 
+def generate_model_verdict_and_questions(prompt, claim_text):
+    """Generate model verdict, questions and keywords from claim text"""
+    model_verdict_content = "Could not generate model verdict."
+    questions = []
+    search_keywords = []
+
+    max_retries = 3
+    retry_count = 0
+
+    while retry_count < max_retries:
+        try:
+            res = call_openrouter(prompt, json_mode=False, temperature=0.0)
+            raw_llm_response = res.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+            raw_llm_response = normalize_text_for_display(raw_llm_response)
+
+            if not raw_llm_response.strip():
+                raise ValueError("Empty response from OpenRouter")
+
+            # Parse text response with regex
+            verdict_match = re.search(r'Verdict:\s*(VERIFIED|PARTIALLY_SUPPORTED|INCONCLUSIVE|CONTRADICTED|SUPPORTED|NOT_SUPPORTED|FEASIBLE|POSSIBLE_BUT_UNPROVEN|UNLIKELY|NONSENSE)', raw_llm_response, re.IGNORECASE)
+            if not verdict_match:
+                logging.warning(f"Invalid verdict format in attempt {retry_count + 1}, retrying...")
+                retry_count += 1
+                continue
+
+            verdict = verdict_match.group(1).upper()
+            justification_match = re.search(r'Justification:\s*([\s\S]{20,1000}?(?=\n\s*(?:Sources|Keywords|$)))', raw_llm_response, re.IGNORECASE | re.DOTALL)
+            justification = justification_match.group(1).strip()[:1000] if justification_match else 'Justification could not be parsed from response.'
+
+            sources_match = re.search(r'Sources:\s*([\s\S]*?)(?=\n\s*(?:Keywords|$))', raw_llm_response, re.IGNORECASE | re.DOTALL)
+            sources = []
+            if sources_match:
+                source_text = sources_match.group(1).strip()
+                sources = re.findall(r'(https?://[^\s,)]+)', source_text)[:2] or ['None']
+
+            keywords_match = re.search(r'Keywords:\s*([\w\s,-]{10,})', raw_llm_response, re.IGNORECASE | re.DOTALL)
+            if keywords_match:
+                kw_text = keywords_match.group(1).strip()
+                search_keywords = [kw.strip().lower() for kw in re.split(r'[,;\s]+', kw_text) if len(kw.strip()) > 3][:5]
+            else:
+                words = re.findall(r'\b[a-zA-Z]{4,}\b', claim_text.lower())
+                search_keywords = list(set(words[:5])) or [claim_text.lower()[:50]]
+
+            # Format for display
+            model_verdict_content = f"Verdict: **{verdict}**\n\nJustification: {justification}"
+            if sources and sources != ['None']:
+                model_verdict_content += f"\n\nSources:\n" + "\n".join(f"- {src}" for src in sources)
+
+            # Generate questions
+            try:
+                questions = generate_questions_for_claim(claim_text)
+            except Exception as e:
+                logging.error(f"Failed to generate questions: {e}")
+                questions = ["Could not generate research questions"]
+
+            break  # Successful parse, exit retry loop
+
+        except Exception as e:
+            logging.error(f"Failed to process LLM response in attempt {retry_count + 1}: {e}")
+            retry_count += 1
+            if retry_count == max_retries:
+                model_verdict_content = f"Error generating verdict after {max_retries} attempts: {str(e)}"
+                words = re.findall(r'\b[a-zA-Z]{4,}\b', claim_text.lower())
+                search_keywords = list(set(words[:5])) or [claim_text.lower()[:50]]
+                questions = ["Could not generate research questions"]
+
+    return model_verdict_content, questions, search_keywords
+
 def fetch_crossref(keywords):
     if not keywords:
-        logging.warning("No keywords provided for CrossRef search.")
         return []
 
-    # Join keywords with AND, add quotes for multi-word phrases for better search specificity
     search_query = ' AND '.join([f'"{kw}"' if ' ' in kw else kw for kw in keywords])
     url = f"https://api.crossref.org/works?query={quote_plus(search_query)}&rows=3&select=title,URL,author,abstract"
     headers = {"User-Agent": "SciCheckAgent/1.0 (mailto:alizgravenil@gmail.com)"}
@@ -675,10 +549,8 @@ def fetch_crossref(keywords):
 
 def fetch_core(keywords):
     if not keywords:
-        logging.warning("No keywords provided for CORE search.")
         return []
 
-    # Join keywords with AND, add quotes for multi-word phrases for better search specificity
     search_query = ' AND '.join([f'"{kw}"' if ' ' in kw else kw for kw in keywords])
     url = f"https://core.ac.uk:443/api-v2/search/{quote_plus(search_query)}?page=1&pageSize=3&metadata=true"
     headers = {"User-Agent": "SciCheckFallback/1.0"}
@@ -702,19 +574,15 @@ def fetch_core(keywords):
 def fetch_semantic_scholar(keywords, max_results=3):
     """Fetch research papers from Semantic Scholar API"""
     SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
-
     if not SEMANTIC_SCHOLAR_API_KEY:
         logging.warning("SEMANTIC_SCHOLAR_API_KEY not set")
         return []
 
-    # Join keywords for search - Semantic Scholar handles natural language well
     search_query = ' '.join(keywords)
-
     headers = {
         "x-api-key": SEMANTIC_SCHOLAR_API_KEY,
         "User-Agent": "SciCheckAgent/1.0 (mailto:alizgravenil@gmail.com)"
     }
-
     params = {
         "query": search_query,
         "limit": max_results,
@@ -728,27 +596,21 @@ def fetch_semantic_scholar(keywords, max_results=3):
             params=params,
             timeout=10
         )
-
         if response.status_code == 429:
             logging.warning("Semantic Scholar rate limit exceeded")
             return []
-
         response.raise_for_status()
-
         data = response.json()
         results = []
-
         if "data" in data and data["data"]:
             for paper in data["data"]:
-                # Get authors as string
                 authors_list = []
                 if paper.get("authors"):
                     authors_list = [author.get("name", "") for author in paper["authors"]]
-                authors_str = ", ".join(authors_list[:3])  # First 3 authors
+                authors_str = ", ".join(authors_list[:3])
                 if len(authors_list) > 3:
                     authors_str += " et al."
 
-                # Construct URL - prefer Semantic Scholar URL, fallback to other IDs
                 paper_url = paper.get("url", "")
                 if not paper_url and paper.get("externalIds", {}).get("DOI"):
                     paper_url = f"https://doi.org/{paper['externalIds']['DOI']}"
@@ -767,10 +629,7 @@ def fetch_semantic_scholar(keywords, max_results=3):
                     "source": "Semantic Scholar"
                 }
                 results.append(result)
-
-        logging.info(f"Semantic Scholar found {len(results)} papers for query: {search_query}")
         return results
-
     except requests.exceptions.RequestException as e:
         logging.warning(f"Semantic Scholar API call failed for query '{search_query}': {e}")
         return []
@@ -785,6 +644,7 @@ def fetch_pubmed(keywords):
 
     search_query = '+'.join(keywords)
     url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={search_query}&retmode=json&retmax=3"
+
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -793,7 +653,6 @@ def fetch_pubmed(keywords):
         if not id_list:
             return []
 
-        # Fetch details for the articles
         details_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id={','.join(id_list)}&retmode=json"
         details_response = requests.get(details_url, timeout=10)
         details_data = details_response.json()
@@ -813,7 +672,6 @@ def fetch_pubmed(keywords):
 def analyze_image_with_ocr(image_path):
     """Extract text from image using OCR"""
     try:
-        # Use Tesseract OCR to extract text from image
         extracted_text = pytesseract.image_to_string(Image.open(image_path))
         return extracted_text.strip()
     except Exception as e:
@@ -823,27 +681,24 @@ def analyze_image_with_ocr(image_path):
 def transcribe_video(video_path, max_retries=5, retry_delay=5):
     """Transcribe uploaded video using Whisper API"""
     try:
-        # Load API key
         WHISPER_API_KEY = os.getenv("WHISPER_API_KEY")
         if not WHISPER_API_KEY:
-            logging.error("WHISPER_API_KEY not set.")
             raise ValueError("WHISPER_API_KEY is not set in environment variables.")
 
-        # Extract audio from video
         audio_path = video_path + ".mp3"
         video_clip = VideoFileClip(video_path)
         video_clip.audio.write_audiofile(audio_path)
         video_clip.close()
 
-        # Call Whisper API
         with open(audio_path, "rb") as audio_file:
             files = {"file": audio_file}
             headers = {"X-API-Key": WHISPER_API_KEY}
             data = {
-                "format": "text",  # Default format
-                "language": "en",  # Default language
-                "model_size": "base"  # Default model
+                "format": "text",
+                "language": "en",
+                "model_size": "base"
             }
+
             response = requests.post(
                 "https://api.whisper-api.com/transcribe",
                 files=files,
@@ -852,30 +707,23 @@ def transcribe_video(video_path, max_retries=5, retry_delay=5):
                 timeout=120
             )
 
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("status") == "pending":
-                # Handle asynchronous response
-                task_id = result.get("task_id")
-                if not task_id:
-                    raise ValueError("No task_id returned for pending transcription")
-                logging.info(f"Transcription pending, task_id: {task_id}")
-                return poll_transcription_status(task_id, WHISPER_API_KEY, max_retries, retry_delay)
-            transcription = result.get("result", "")
-            if not transcription:
-                logging.warning("No transcription returned from Whisper API")
-                raise ValueError("No transcription returned from Whisper API")
-            logging.info(f"Video transcribed successfully: {video_path}")
-            return transcription
-        else:
-            logging.error(f"Whisper API error: {response.status_code} - {response.text}")
-            raise ValueError(f"Whisper API error: {response.status_code} - {response.text}")
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("status") == "pending":
+                    task_id = result.get("task_id")
+                    if not task_id:
+                        raise ValueError("No task_id returned for pending transcription")
+                    return poll_transcription_status(task_id, WHISPER_API_KEY, max_retries, retry_delay)
+                transcription = result.get("result", "")
+                if not transcription:
+                    raise ValueError("No transcription returned from Whisper API")
+                return transcription
+            else:
+                raise ValueError(f"Whisper API error: {response.status_code} - {response.text}")
 
     except requests.exceptions.RequestException as e:
-        logging.error(f"Network error calling Whisper API: {e}")
         raise ValueError(f"Network error: Failed to connect to transcription service")
     except Exception as e:
-        logging.error(f"Transcription failed: {e}")
         if os.path.exists(audio_path):
             os.remove(audio_path)
         raise ValueError(f"Failed to transcribe video: {str(e)}")
@@ -886,13 +734,10 @@ def transcribe_video(video_path, max_retries=5, retry_delay=5):
 def transcribe_from_url(video_url, max_retries=5, retry_delay=5):
     """Transcribe video URL using Whisper API"""
     try:
-        # Load API key
         WHISPER_API_KEY = os.getenv("WHISPER_API_KEY")
         if not WHISPER_API_KEY:
-            logging.error("WHISPER_API_KEY not set.")
             raise ValueError("WHISPER_API_KEY is not set in environment variables.")
 
-        # Download audio using yt-dlp
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': '/tmp/%(id)s.%(ext)s',
@@ -903,11 +748,11 @@ def transcribe_from_url(video_url, max_retries=5, retry_delay=5):
             }],
             'quiet': True
         }
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
             audio_path = ydl.prepare_filename(info).rsplit('.', 1)[0] + '.mp3'
 
-        # Call Whisper API
         with open(audio_path, "rb") as audio_file:
             files = {"file": audio_file}
             headers = {"X-API-Key": WHISPER_API_KEY}
@@ -916,6 +761,7 @@ def transcribe_from_url(video_url, max_retries=5, retry_delay=5):
                 "language": "en",
                 "model_size": "base"
             }
+
             response = requests.post(
                 "https://api.whisper-api.com/transcribe",
                 files=files,
@@ -924,30 +770,23 @@ def transcribe_from_url(video_url, max_retries=5, retry_delay=5):
                 timeout=120
             )
 
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("status") == "pending":
-                # Handle asynchronous response
-                task_id = result.get("task_id")
-                if not task_id:
-                    raise ValueError("No task_id returned for pending transcription")
-                logging.info(f"Transcription pending, task_id: {task_id}")
-                return poll_transcription_status(task_id, WHISPER_API_KEY, max_retries, retry_delay)
-            transcription = result.get("result", "")
-            if not transcription:
-                logging.warning("No transcription returned from Whisper API")
-                raise ValueError("No transcription returned from Whisper API")
-            logging.info(f"Video URL transcribed successfully: {video_url}")
-            return transcription
-        else:
-            logging.error(f"Whisper API error: {response.status_code} - {response.text}")
-            raise ValueError(f"Whisper API error: {response.status_code} - {response.text}")
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("status") == "pending":
+                    task_id = result.get("task_id")
+                    if not task_id:
+                        raise ValueError("No task_id returned for pending transcription")
+                    return poll_transcription_status(task_id, WHISPER_API_KEY, max_retries, retry_delay)
+                transcription = result.get("result", "")
+                if not transcription:
+                    raise ValueError("No transcription returned from Whisper API")
+                return transcription
+            else:
+                raise ValueError(f"Whisper API error: {response.status_code} - {response.text}")
 
     except requests.exceptions.RequestException as e:
-        logging.error(f"Network error calling Whisper API: {e}")
         raise ValueError(f"Network error: Failed to connect to transcription service")
     except Exception as e:
-        logging.error(f"URL transcription failed: {e}")
         if 'audio_path' in locals() and os.path.exists(audio_path):
             os.remove(audio_path)
         raise ValueError(f"Failed to transcribe video URL: {str(e)}")
@@ -955,42 +794,35 @@ def transcribe_from_url(video_url, max_retries=5, retry_delay=5):
         if 'audio_path' in locals() and os.path.exists(audio_path):
             os.remove(audio_path)
 
-def poll_transcription_status(task_id, api_key, max_retries=5, retry_delay=5):
-    """Poll Whisper API for transcription status"""
+def poll_transcription_status(task_id, api_key, max_retries, retry_delay):
+    """Poll for transcription status until completion or max retries"""
     headers = {"X-API-Key": api_key}
     for attempt in range(max_retries):
         try:
             response = requests.get(
-                f"https://api.whisper-api.com/status/{task_id}",
+                f"https://api.whisper-api.com/transcribe/{task_id}",
                 headers=headers,
                 timeout=30
             )
             if response.status_code == 200:
                 result = response.json()
-                status = result.get("status")
-                if status == "completed":
+                if result.get("status") == "completed":
                     transcription = result.get("result", "")
-                    if not transcription:
-                        logging.warning(f"No transcription returned for task_id: {task_id}")
-                        raise ValueError("No transcription returned from Whisper API")
-                    logging.info(f"Transcription completed for task_id: {task_id}")
-                    return transcription
-                elif status == "failed":
-                    error = result.get("error", "Unknown error")
-                    logging.error(f"Transcription failed for task_id: {task_id}, error: {error}")
-                    raise ValueError(f"Transcription failed: {error}")
-                else:
-                    logging.info(f"Transcription still pending for task_id: {task_id}, attempt {attempt + 1}/{max_retries}")
+                    if transcription:
+                        return transcription
+                    else:
+                        raise ValueError("Transcription completed but no result returned")
+                elif result.get("status") == "processing":
                     time.sleep(retry_delay)
+                else:
+                    raise ValueError(f"Transcription failed with status: {result.get('status')}")
             else:
-                logging.error(f"Status check failed: {response.status_code} - {response.text}")
-                raise ValueError(f"Status check failed: {response.status_code} - {response.text}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
         except requests.exceptions.RequestException as e:
-            logging.error(f"Network error during status check for task_id: {task_id}: {e}")
-            if attempt == max_retries - 1:
-                raise ValueError(f"Network error during status check: {str(e)}")
-            time.sleep(retry_delay)
-    raise ValueError(f"Transcription did not complete within {max_retries} attempts")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+    raise ValueError("Transcription timed out after maximum retries")
 
 def save_uploaded_file(file, upload_folder="/home/scicheckagent/mysite/uploads"):
     """Save uploaded file and return path"""
@@ -1004,35 +836,75 @@ def save_uploaded_file(file, upload_folder="/home/scicheckagent/mysite/uploads")
         logging.error(f"Error saving uploaded file: {e}")
         return None
 
-def normalize_text_for_pdf(text):
-    """Normalize Unicode text for PDF compatibility"""
+def normalize_text_for_display(text):
+    """Normalize text for HTML display (modal, inline view)"""
     if not text:
         return text
 
-    # Normalize Unicode
+    # Normalize Unicode first
     normalized = unicodedata.normalize('NFKD', text)
 
-    # Replace problematic characters
+    # Comprehensive replacements for display
     replacements = {
-        '–': '-',  # en-dash
-        '—': '-',  # em-dash
-        'â': '-',
-        'â': '-',
-        'â': "'",
-        'â': '"',
-        'â': '"',
-        '¯': ' ',
-        '­': '',  # soft hyphen
-        'Î²': 'beta',
-        'Î±': 'alpha',
-        'Î³': 'gamma',
-        'â': '-',  # common mis-encoding
+        # Dashes and hyphens
+        '–': '-', '—': '-', '‐': '-', '‑': '-', '‒': '-', '−': '-',
+
+        # Smart quotes and apostrophes
+        '‘': "'", '’': "'", '“': '"', '”': '"',
+        '«': '"', '»': '"', '´': "'", '`': "'",
+
+        # Common mis-encodings from your examples
+        'â': '-', 'â': '-', 'â ̄': ' ',
+        'â': '-', 'â': '-', 'â ̄': ' ',
+        'â\x80\x94': '-', 'â\x80\x9c': '"', 'â\x80\x9d': '"',
+        'â\x80\x91': '-', 'â\x80 \u0304': '',
+        'â\x82\x82': '²', 'â\x82\x88': '⁸',
+
+        # Spaces
+        ' ': ' ', ' ': ' ', ' ': ' ', '': '', '﻿': '',
+
+        # Mathematical symbols
+        '×': '×', '÷': '÷', '±': '±', 'µ': 'µ', '°': '°',
+
+        # Greek letters (keep as-is for display)
+        'α': 'α', 'β': 'β', 'γ': 'γ', 'δ': 'δ',
+        'ε': 'ε', 'ζ': 'ζ', 'η': 'η', 'θ': 'θ',
+        # ... include all Greek letters you want to preserve
     }
 
     for old, new in replacements.items():
         normalized = normalized.replace(old, new)
 
+    # Remove any remaining problematic control characters but preserve readable Unicode
+    normalized = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', normalized)
+
     return normalized
+
+def normalize_text_for_pdf(text):
+    """Normalize text specifically for PDF generation"""
+    if not text:
+        return text
+
+    # First apply display normalization
+    text = normalize_text_for_display(text)
+
+    # Additional PDF-specific replacements
+    pdf_replacements = {
+        # Convert Greek letters to text for PDF compatibility
+        'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta',
+        'ε': 'epsilon', 'ζ': 'zeta', 'η': 'eta', 'θ': 'theta',
+        'ι': 'iota', 'κ': 'kappa', 'λ': 'lambda', 'μ': 'mu',
+        'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron', 'π': 'pi',
+        'ρ': 'rho', 'σ': 'sigma', 'τ': 'tau', 'υ': 'upsilon',
+        'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
+        'Α': 'Alpha', 'Β': 'Beta', 'Γ': 'Gamma', 'Δ': 'Delta',
+        # ... etc
+    }
+
+    for old, new in pdf_replacements.items():
+        text = text.replace(old, new)
+
+    return text
 
 def convert_markdown_tables_to_simple_text(text):
     """Convert markdown tables to simple text format for PDF"""
@@ -1041,41 +913,44 @@ def convert_markdown_tables_to_simple_text(text):
     def replace_table(match):
         table_text = match.group(0)
         lines = [line.strip() for line in table_text.split('\n') if line.strip().startswith('|')]
-
         if len(lines) < 2:
             return table_text
 
-        # Extract cells from each line
         table_data = []
         for line in lines:
-            cells = [cell.strip() for cell in line.split('|')[1:-1]]  # Remove empty first/last elements
+            cells = [cell.strip() for cell in line.split('|')[1:-1]]
             table_data.append(cells)
 
-        # Check if second line is a separator
         if all(cell.replace('-', '').replace(':', '').replace(' ', '') == '' for cell in table_data[1]):
-            table_data.pop(1)  # Remove separator line
+            table_data.pop(1)
 
-        # Convert to simple text representation
         result = []
         for row in table_data:
             result.append(' | '.join(row))
-
         return '\n'.join(result) + '\n\n'
 
     return re.sub(table_pattern, replace_table, text, flags=re.MULTILINE)
 
+def draw_paragraph(pdf_canvas, text_content, style, y_pos, page_width, left_margin=0.75*inch, right_margin=0.75*inch):
+    available_width = page_width - left_margin - right_margin
+    text_content = normalize_text_for_display(text_content)
+    text_content = text_content.replace('\n', '<br/>')
+    para = Paragraph(text_content, style)
+    w, h = para.wrapOn(pdf_canvas, available_width, 0)
+    if y_pos - h < 0.75*inch:
+        pdf_canvas.showPage()
+        y_pos = A4[1] - 0.75*inch
+    para.drawOn(pdf_canvas, left_margin, y_pos - h)
+    return y_pos - h - style.spaceAfter
 
 # API Endpoints
 
-# Redirect root to /analyze
 @app.route("/")
 def home_redirect():
-    """Redirects the root URL to the /analyze route."""
     return redirect(url_for('analyze_page'))
 
 @app.route("/analyze")
 def analyze_page():
-    """Renders the main page, optionally pre-filling the claim from query parameters."""
     prefill_claim = request.args.get("claim", "")
     return render_template("index.html", prefill_claim=prefill_claim)
 
@@ -1086,22 +961,16 @@ def share_target():
     shared_url = request.form.get('url', '')
     prefill_content = ""
 
-    # Prioritize shared text if available
     if shared_text:
         prefill_content = shared_text
-    # If there's also a URL, append it to the text for context,
-    # but avoid re-adding if the text already contains the URL
     if shared_url and not (shared_url in shared_text or "http" in shared_text or "www" in shared_text):
         prefill_content += f"\n\n(Shared from: {shared_url})"
-    elif shared_title and not shared_url:  # If text and title, but no URL
+    elif shared_title and not shared_url:
         prefill_content = f"{shared_title}\n\n{shared_text}"
-    # If no text was highlighted/shared, but a URL was shared (e.g., sharing a link directly)
-    # Since you want to avoid external fetching, we'll just put the URL itself in the text area.
     elif shared_url:
         prefill_content = f"Shared URL: {shared_url}"
-        if shared_title:  # Add title if available with URL
+        if shared_title:
             prefill_content = f"{shared_title}\n\n{prefill_content}"
-    # If only a title was shared (less common)
     elif shared_title:
         prefill_content = shared_title
 
@@ -1117,8 +986,6 @@ def extract_article():
         text = extract_article_from_url(url)
         if not text:
             return jsonify({"error": "Could not extract content from URL. Please ensure it's a valid public webpage or paste the text manually."}), 400
-
-        logging.info(f"Returning article text to client (first 100 chars): {text[:100]}...")
         return jsonify({"article_text": text})
     except Exception as e:
         logging.error(f"Error in extract_article endpoint: {e}")
@@ -1126,74 +993,33 @@ def extract_article():
 
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
-    """API endpoint to extract claims ONLY with global content caching."""
+    """API endpoint to extract claims ONLY with normalized storage."""
     data = request.json
     text = data.get("text")
     mode = data.get("mode")
-    use_papers = data.get("usePapers", False)
+
 
     if not text or not mode:
         return jsonify({"error": "Missing text or analysis mode."}), 400
 
-    # Create content hash (text + mode combination)
-    content_hash = compute_content_hash(f"{text}_{mode}")
+    # Create new analysis
+    analysis_id = new_analysis_id()
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO analyses (analysis_id, mode) VALUES (?, ?)", (analysis_id, mode))
+    conn.commit()
+    conn.close()
 
-    # ✅ CHECK GLOBAL CACHE FIRST
-    cached_analysis = get_global_cache(content_hash, mode)
-    if cached_analysis:
-        logging.info(f"✅ GLOBAL CACHE HIT for content: {content_hash[:16]}...")
-        logging.info(f"✅ Serving cached analysis for '{text[:50]}...' with mode '{mode}'")
-
-        # Still create user session for this analysis (for UI consistency)
-        article_id = str(uuid.uuid4())
-        session_data = {
-            "text": text,
-            "mode": mode,
-            "use_papers": use_papers,
-            "claims_data": cached_analysis['claims_data'],
-            "cached_from_global": True,
-            "global_cache_hash": content_hash
-        }
-        store_analysis(article_id, session_data)
-        session['current_article_id'] = article_id
-
-        # Return cached claims
-        claims_list = [claim['text'] for claim in cached_analysis['claims_data']]
-        return jsonify({
-            "claims": claims_list,
-            "cached": True,
-            "global_cache": True,
-            "cache_info": f"Serving from global cache (used {cached_analysis.get('access_count', 1)} times)"
-        })
-
-    # 🔄 No cache found - proceed with normal analysis
-    logging.info(f"🔄 GLOBAL CACHE MISS for content: {content_hash[:16]}...")
-    logging.info(f"🔄 Analyzing fresh content: '{text[:50]}...'")
-
-    article_id = str(uuid.uuid4())
-    session_data = {
-        "text": text,
-        "mode": mode,
-        "use_papers": use_papers,
-        "claims_data": [],
-        "cached_from_global": False
-    }
-
-    # Store initial session data
-    store_analysis(article_id, session_data)
-    session['current_article_id'] = article_id
+    session['analysis_id'] = analysis_id
+    session['mode'] = mode
 
     extraction_prompt = extraction_templates[mode].format(text=text)
 
     try:
-        logging.info("Calling OpenRouter for claim extraction...")
         res = call_openrouter(extraction_prompt)
         raw_claims = res.json()["choices"][0]["message"]["content"]
 
         if "No explicit claims found" in raw_claims or not raw_claims.strip():
-            # Update session with empty claims
-            session_data["claims_data"] = []
-            store_analysis(article_id, session_data)
             return jsonify({"claims": []})
 
         claims_list = []
@@ -1210,33 +1036,12 @@ def analyze():
 
         claims_list = [c for c in claims_list if len(c) > 10 and not c.lower().startswith(("output:", "text:", "no explicit claims found"))]
 
-        # CRITICAL: Update the session data with claims
-        current_session_data = get_analysis(article_id)
-        if current_session_data:
-            # Update the claims data in the session
-            current_session_data["claims_data"] = [{"text": claim_text} for claim_text in claims_list]
-            # Store the updated session data back to database
-            store_analysis(article_id, current_session_data)
-            logging.info(f"✅ Updated session with {len(claims_list)} claims for article_id: {article_id}")
-
-            # ✅ STORE IN GLOBAL CACHE for future users
-            if claims_list:
-                store_global_cache(content_hash, mode,
-                                  [{"text": claim} for claim in claims_list],
-                                  {},  # Model verdicts will be filled by get_claim_details
-                                  {})  # External sources will be filled by verify_external
-                logging.info(f"✅ Stored in GLOBAL CACHE for future users: {content_hash[:16]}...")
-        else:
-            # Fallback: create new session data if retrieval failed
-            session_data["claims_data"] = [{"text": claim_text} for claim_text in claims_list]
-            store_analysis(article_id, session_data)
-            logging.info(f"✅ Created new session with {len(claims_list)} claims for article_id: {article_id}")
+        # Save claims to database
+        save_claims_for_analysis(analysis_id, claims_list)
 
         return jsonify({
             "claims": claims_list,
-            "cached": False,
-            "global_cache": False,
-            "cache_info": "Fresh analysis - now cached for future users"
+            "analysis_id": analysis_id
         })
 
     except Exception as e:
@@ -1245,376 +1050,174 @@ def analyze():
 
 @app.route("/api/get-claim-details", methods=["POST"])
 def get_claim_details():
-    try:
-        claim_idx = request.json.get("claim_idx")
-        current_article_id = session.get('current_article_id')
-        
-        if not current_article_id:
-            return jsonify({"error": "Analysis context missing. Please re-run analysis."}), 400
+    payload = request.json or {}
+    ordinal = payload.get("claim_idx")
+    analysis_id = session.get("analysis_id")
+    mode = session.get("mode") or "General Analysis of Testable Claims"
 
-        # Get data from database
-        article_cache_data = get_analysis(current_article_id)
-        if not article_cache_data:
-            return jsonify({"error": "Analysis session expired or not found."}), 400
+    if analysis_id is None or ordinal is None:
+        return jsonify({"error": "Missing analysis or claim index"}), 400
 
-        claims_data_in_cache = article_cache_data.get('claims_data', [])
-        
-        if claim_idx is None or claim_idx >= len(claims_data_in_cache):
-            return jsonify({"error": "Invalid claim index."}), 400
+    # 1) Get the claim text
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute("SELECT claim_text FROM claims WHERE analysis_id=? AND ordinal=?", (analysis_id, int(ordinal)))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Claim not found"}), 404
 
-        claim_item_in_cache = claims_data_in_cache[claim_idx]
-        claim_text = claim_item_in_cache['text']
+    claim_text = row[0]
+    ch = sha256_str(claim_text.strip().lower())
 
-        # ✅ CHECK GLOBAL CACHE FOR MODEL VERDICTS FIRST
-        global_cache_hash = article_cache_data.get('global_cache_hash')
-        analysis_mode = article_cache_data.get('mode')
-        
-        if global_cache_hash and article_cache_data.get('cached_from_global'):
-            cached_complete = get_global_cache_complete(global_cache_hash, analysis_mode)
-            if cached_complete and cached_complete.get('model_verdicts'):
-                verdicts_dict = cached_complete['model_verdicts']
-                if isinstance(verdicts_dict, dict) and str(claim_idx) in verdicts_dict:
-                    claim_data = verdicts_dict[str(claim_idx)]
-                    logging.info(f"✅ USING GLOBALLY CACHED model verdict for claim {claim_idx}")
-                    
-                    # Also update session cache for consistency
-                    claim_item_in_cache["model_verdict"] = claim_data.get('model_verdict', '')
-                    claim_item_in_cache["questions"] = claim_data.get('questions', [])
-                    claim_item_in_cache["search_keywords"] = claim_data.get('search_keywords', [])
-                    store_analysis(current_article_id, article_cache_data)
-                    
-                    return jsonify({
-                        "model_verdict": claim_data.get('model_verdict', ''),
-                        "questions": claim_data.get('questions', []),
-                        "search_keywords": claim_data.get('search_keywords', []),
-                        "cached": True,
-                        "global_cache": True
-                    })
+    # 2) Hit model_cache
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute("SELECT verdict, questions_json, keywords_json FROM model_cache WHERE claim_hash=?", (ch,))
+    hit = c.fetchone()
+    conn.close()
 
-        # If already cached in session, return immediately
-        if "model_verdict" in claim_item_in_cache and "questions" in claim_item_in_cache:
-            return jsonify({
-                "model_verdict": claim_item_in_cache["model_verdict"],
-                "questions": claim_item_in_cache["questions"],
-                "search_keywords": claim_item_in_cache.get("search_keywords", []),
-                "cached": True
-            })
-
-        # Safely get the analysis mode with validation
-        current_analysis_mode = article_cache_data.get('mode')
-        logging.info(f"Current analysis mode: {current_analysis_mode}")
-
-        # Validate the analysis mode
-        if not current_analysis_mode or current_analysis_mode not in verification_prompts:
-            logging.warning(f"Invalid analysis mode: {current_analysis_mode}. Using default.")
-            current_analysis_mode = 'General Analysis of Testable Claims'
-
-        # Generate verdict with retry loop
-        verdict_prompt = verification_prompts[current_analysis_mode].format(claim=claim_text)
-        model_verdict_content = "Could not generate model verdict."
-        questions = []
-        search_keywords = []
-        max_retries = 3
-        retry_count = 0
-
-        while retry_count < max_retries:
-            try:
-                logging.info(f"Calling OpenRouter for model verdict for claim {claim_idx}, attempt {retry_count + 1}...")
-                res = call_openrouter(verdict_prompt, json_mode=False, temperature=0.0)
-                raw_llm_response = res.json().get("choices", [{}])[0].get("message", {}).get("content", "")
-
-                logging.info(f"Raw LLM Response (full, attempt {retry_count + 1}): {repr(raw_llm_response)}")
-
-                if not raw_llm_response.strip():
-                    raise ValueError("Empty response from OpenRouter")
-
-                # Parse text response with regex
-                verdict_match = re.search(r'Verdict:\s*(VERIFIED|PARTIALLY_SUPPORTED|INCONCLUSIVE|CONTRADICTED|SUPPORTED|NOT_SUPPORTED|FEASIBLE|POSSIBLE_BUT_UNPROVEN|UNLIKELY|NONSENSE)', raw_llm_response, re.IGNORECASE)
-                if not verdict_match:
-                    logging.warning(f"Invalid verdict format in attempt {retry_count + 1}, retrying...")
-                    retry_count += 1
-                    continue
-
-                verdict = verdict_match.group(1).upper()
-                justification_match = re.search(r'Justification:\s*([\s\S]{20,1000}?(?=\n\s*(?:Sources|Keywords|$)))', raw_llm_response, re.IGNORECASE | re.DOTALL)
-                justification = justification_match.group(1).strip()[:1000] if justification_match else 'Justification could not be parsed from response.'
-
-                sources_match = re.search(r'Sources:\s*([\s\S]*?)(?=\n\s*(?:Keywords|$))', raw_llm_response, re.IGNORECASE | re.DOTALL)
-                sources = []
-                if sources_match:
-                    source_text = sources_match.group(1).strip()
-                    sources = re.findall(r'(https?://[^\s,)]+)', source_text)[:2] or ['None']
-
-                keywords_match = re.search(r'Keywords:\s*([\w\s,-]{10,})', raw_llm_response, re.IGNORECASE | re.DOTALL)
-                if keywords_match:
-                    kw_text = keywords_match.group(1).strip()
-                    search_keywords = [kw.strip().lower() for kw in re.split(r'[,;\s]+', kw_text) if len(kw.strip()) > 3][:5]
-                else:
-                    words = re.findall(r'\b[a-zA-Z]{4,}\b', claim_text.lower())
-                    search_keywords = list(set(words[:5])) or [claim_text.lower()[:50]]
-
-                # Format for display
-                model_verdict_content = f"Verdict: **{verdict}**\n\nJustification: {justification}"
-                if sources and sources != ['None']:
-                    model_verdict_content += f"\n\nSources:\n" + "\n".join(f"- {src}" for src in sources)
-
-                break  # Successful parse, exit retry loop
-
-            except Exception as e:
-                logging.error(f"Failed to process LLM response in attempt {retry_count + 1}: {e}")
-                retry_count += 1
-                if retry_count == max_retries:
-                    model_verdict_content = f"Error generating verdict after {max_retries} attempts: {str(e)}"
-                    words = re.findall(r'\b[a-zA-Z]{4,}\b', claim_text.lower())
-                    search_keywords = list(set(words[:5])) or [claim_text.lower()[:50]]
-
-        # Generate questions
-        try:
-            questions = generate_questions_for_claim(claim_text)
-        except Exception as e:
-            logging.error(f"Failed to generate questions: {e}")
-            questions = ["Could not generate research questions"]
-
-        # Store results in database
-        claim_item_in_cache["model_verdict"] = model_verdict_content
-        claim_item_in_cache["questions"] = questions
-        claim_item_in_cache["search_keywords"] = search_keywords
-
-        # ✅ STORE IN GLOBAL CACHE FOR FUTURE USERS
-        if global_cache_hash:
-            update_global_cache_with_verdicts(
-                global_cache_hash, 
-                analysis_mode,
-                claim_idx,
-                {
-                    "model_verdict": model_verdict_content,
-                    "questions": questions,
-                    "search_keywords": search_keywords
-                }
-            )
-            logging.info(f"✅ Stored model verdict in global cache for claim {claim_idx}")
-
-        # Update database
-        store_analysis(current_article_id, article_cache_data)
-        update_access_time(current_article_id)
-
+    if hit:
         return jsonify({
-            "model_verdict": model_verdict_content,
-            "questions": questions,
-            "search_keywords": search_keywords,
-            "cached": False,
-            "global_cache": bool(global_cache_hash)
-        })
-
-    except Exception as e:
-        logging.error(f"Error in get_claim_details: {e}")
-        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
-
-
-@app.route("/api/cleanup-cache", methods=["POST"])
-def cleanup_cache_endpoint():
-    """Manual cache cleanup endpoint"""
-    try:
-        cleanup_old_cache()
-        return jsonify({"message": "Cache cleanup completed successfully"})
-    except Exception as e:
-        logging.error(f"Manual cleanup error: {e}")
-        return jsonify({"error": f"Cleanup failed: {str(e)}"}), 500
-
-
-@app.route("/api/verify-external", methods=["POST"])
-def verify_external():
-    claim_idx = request.json.get("claim_idx")
-    current_article_id = session.get('current_article_id')
-
-    if not current_article_id:
-        return jsonify({"error": "Analysis context missing. Please re-run analysis."}), 400
-
-    article_cache_data = get_analysis(current_article_id)
-    if not article_cache_data:
-        return jsonify({"error": "Analysis session expired or not found."}), 400
-
-    claims_data_in_cache = article_cache_data.get('claims_data', [])
-    use_papers = article_cache_data.get('use_papers', False)
-
-    if claim_idx is None or not isinstance(claim_idx, int) or claim_idx >= len(claims_data_in_cache):
-        return jsonify({"error": "Invalid claim index or analysis data missing."}), 400
-
-    claim_data_in_cache = claims_data_in_cache[claim_idx]
-    claim_text = claim_data_in_cache['text']
-
-    # ✅ CHECK GLOBAL CACHE FOR EXTERNAL VERDICTS FIRST
-    global_cache_hash = article_cache_data.get('global_cache_hash')
-    analysis_mode = article_cache_data.get('mode')
-    
-    if global_cache_hash and article_cache_data.get('cached_from_global'):
-        cached_complete = get_global_cache_complete(global_cache_hash, analysis_mode)
-        if cached_complete and cached_complete.get('external_sources'):
-            external_dict = cached_complete['external_sources']
-            if isinstance(external_dict, dict) and str(claim_idx) in external_dict:
-                external_data = external_dict[str(claim_idx)]
-                logging.info(f"✅ USING GLOBALLY CACHED external verdict for claim {claim_idx}")
-                
-                # Also update session cache for consistency
-                claim_data_in_cache["external_verdict"] = external_data.get('verdict', '')
-                claim_data_in_cache["sources"] = external_data.get('sources', [])
-                store_analysis(current_article_id, article_cache_data)
-                
-                return jsonify({
-                    "verdict": external_data.get('verdict', ''),
-                    "sources": external_data.get('sources', []),
-                    "cached": True,
-                    "global_cache": True
-                })
-
-    # Check if we already have external verification results
-    if "external_verdict" in claim_data_in_cache and "sources" in claim_data_in_cache:
-        logging.info(f"Using cached external verification for claim {claim_idx}")
-        return jsonify({
-            "verdict": claim_data_in_cache["external_verdict"],
-            "sources": claim_data_in_cache["sources"],
+            "model_verdict": hit[0],
+            "questions": json_loads(hit[1], []),
+            "search_keywords": json_loads(hit[2], []),
             "cached": True
         })
 
-    # Retrieve stored search_keywords from cache for API calls
-    search_keywords_for_papers = claim_data_in_cache.get('search_keywords', [claim_text])
-    if not search_keywords_for_papers:
-        search_keywords_for_papers = [claim_text]
+    # 3) Compute using existing logic
+    verdict_prompt = verification_prompts[(mode if mode in verification_prompts else 'General Analysis of Testable Claims')].format(claim=claim_text)
+    model_verdict_content, questions, search_keywords = generate_model_verdict_and_questions(verdict_prompt, claim_text)
 
-    # Create cache key for external sources
-    sources_cache_key = compute_content_hash('_'.join(sorted(search_keywords_for_papers)))
+    # 4) Store in model_cache
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute("""
+    INSERT INTO model_cache (claim_hash, verdict, questions_json, keywords_json, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(claim_hash) DO UPDATE SET
+    verdict=excluded.verdict,
+    questions_json=excluded.questions_json,
+    keywords_json=excluded.keywords_json,
+    updated_at=CURRENT_TIMESTAMP
+    """, (ch, model_verdict_content, json_dumps(questions or []), json_dumps(search_keywords or [])))
+    conn.commit()
+    conn.close()
 
-    sources = []
-    external_verdict = "External verification toggled off or no relevant sources found."
+    return jsonify({
+        "model_verdict": model_verdict_content,
+        "questions": questions or [],
+        "search_keywords": search_keywords or [],
+        "cached": False
+    })
 
-    if use_papers:
-        # Check cache for external sources
-        cached_sources = get_cached_external_sources(sources_cache_key)
+@app.route("/api/verify-external", methods=["POST"])
+def verify_external():
+    payload = request.json or {}
+    ordinal = payload.get("claim_idx")
+    analysis_id = session.get("analysis_id")
 
-        if cached_sources:
-            logging.info(f"Using cached external sources for keywords: {search_keywords_for_papers}")
-            sources = cached_sources
-        else:
-            # Fetch from multiple sources with rate limiting delays
-            all_sources = []
+    if analysis_id is None or ordinal is None:
+        return jsonify({"error": "Missing analysis or claim index"}), 400
 
-            # 1. Semantic Scholar (primary - most reliable)
-            logging.info(f"Fetching Semantic Scholar sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
-            semantic_sources = fetch_semantic_scholar(search_keywords_for_papers)
-            all_sources.extend(semantic_sources)
-            time.sleep(1.1)  # Respect 1 request per second rate limit
+    # 1) get claim text
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute("SELECT claim_text FROM claims WHERE analysis_id=? AND ordinal=?", (analysis_id, int(ordinal)))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Claim not found"}), 404
 
-            # 2. CrossRef
-            logging.info(f"Fetching CrossRef sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
-            crossref_sources = fetch_crossref(search_keywords_for_papers)
-            all_sources.extend(crossref_sources)
-            time.sleep(0.5)
+    claim_text = row[0]
+    ch = sha256_str(claim_text.strip().lower())
 
-            # 3. CORE
-            logging.info(f"Fetching CORE sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
-            core_sources = fetch_core(search_keywords_for_papers)
-            all_sources.extend(core_sources)
-            time.sleep(0.5)
+    # 2) check external_cache
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute("SELECT verdict, sources_json FROM external_cache WHERE claim_hash=?", (ch,))
+    hit = c.fetchone()
+    conn.close()
 
-            # 4. PubMed
-            logging.info(f"Fetching PubMed sources for claim {claim_idx} using keywords: {search_keywords_for_papers}...")
-            pubmed_sources = fetch_pubmed(search_keywords_for_papers)
-            all_sources.extend(pubmed_sources)
-            time.sleep(0.5)
+    if hit:
+        return jsonify({"verdict": hit[0], "sources": json_loads(hit[1], []), "cached": True})
 
-            # Remove duplicates by URL
-            seen_urls = set()
-            unique_sources = []
-            for s in all_sources:
-                url = s.get('url', '')
-                if url and url not in seen_urls:
-                    unique_sources.append(s)
-                    seen_urls.add(url)
+    # 3) build keywords; if model_cache has them, reuse
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute("SELECT keywords_json FROM model_cache WHERE claim_hash=?", (ch,))
+    kw_row = c.fetchone()
+    conn.close()
 
-            sources = unique_sources
+    search_keywords = json_loads(kw_row[0], []) if kw_row else []
+    if not search_keywords:
+        import re
+        words = re.findall(r'\b[a-zA-Z]{4,}\b', claim_text.lower())
+        search_keywords = list(set(words[:5])) or [claim_text.lower()[:50]]
 
-            # Cache the sources for future use
-            if sources:
-                store_external_sources_cache(sources_cache_key, sources)
+    # 4) fetch sources (existing functions)
+    all_sources = []
+    all_sources.extend(fetch_semantic_scholar(search_keywords))
+    time.sleep(1.1)
+    all_sources.extend(fetch_crossref(search_keywords))
+    time.sleep(0.5)
+    all_sources.extend(fetch_core(search_keywords))
+    time.sleep(0.5)
+    all_sources.extend(fetch_pubmed(search_keywords))
 
-        if sources:
-            # Prepare paper information for the LLM
-            abstracts_and_titles = "\n\n".join(
-                f"Title: {s['title']}\n"
-                f"Abstract: {s.get('abstract', 'Abstract not available')}\n"
-                f"Authors: {s.get('authors', '')}\n"
-                f"Year: {s.get('year', '')}\n"
-                f"Citations: {s.get('citation_count', 0)}\n"
-                f"Source: {s.get('source', 'Unknown')}"
-                for s in sources if s.get('title')
-            )
+    # de-dup by URL
+    seen, unique_sources = set(), []
+    for s in all_sources:
+        url = s.get("url") or ""
+        if url and url not in seen:
+            unique_sources.append(s)
+            seen.add(url)
 
-            prompt = f'''
-            You are an AI assistant evaluating a claim based on provided scientific paper information.
+    # 5) create external verdict with OpenRouter call
+    if unique_sources:
+        abstracts_and_titles = "\n\n".join(
+            f"Title: {s.get('title','No title')}\n"
+            f"Abstract: {s.get('abstract','Abstract not available')}\n"
+            f"Authors: {s.get('authors','')}\n"
+            f"Year: {s.get('year','')}\n"
+            f"Citations: {s.get('citation_count',0)}\n"
+            f"Source: {s.get('source','Unknown')}"
+            for s in unique_sources if s.get('title')
+        )
 
-            Claim to evaluate: "{claim_text}"
+        prompt = f"""You are an AI assistant evaluating a claim based on provided scientific paper information.
 
-            Available Paper Information:
+Claim: "{claim_text}"
 
-            {abstracts_and_titles}
+Papers:
+{abstracts_and_titles}
 
-            Based on this information, provide:
+Return a short verdict and concise justification."""
 
-            1. A verdict: **VERIFIED**, **PARTIALLY SUPPORTED**, **INCONCLUSIVE**, **NO RELEVANT PAPERS** or **CONTRADICTED**.
-
-            2. A concise justification (max 1000 characters) explaining how the provided papers do or do not relate to the claim.
-
-            3. Reference relevant paper titles and their key findings in your justification.
-
-            If the provided papers are insufficient or inconclusive for a clear verdict, state "INCONCLUSIVE" and explain why (e.g., "Insufficient relevant information in provided papers" or "Papers don't directly address the specific claim").
-
-            Consider paper credibility factors like citation count, publication venue, and recency.
-
-            '''
-
-            try:
-                logging.info(f"Calling OpenRouter for external verdict for claim {claim_idx}...")
-                verdict_res = call_openrouter(prompt)
-                external_verdict = verdict_res.json()["choices"][0]["message"]["content"]
-            except Exception as e:
-                logging.error(f"Failed to generate external verdict for claim '{claim_text}': {e}")
-                external_verdict = f"Could not generate external verdict: {str(e)}"
-
-            time.sleep(1)
-        else:
-            external_verdict = "No relevant scientific papers found for this claim."
+        try:
+            verdict_res = call_openrouter(prompt)
+            external_verdict = verdict_res.json()["choices"][0]["message"]["content"]
+        except Exception as e:
+            logging.error(f"External verdict failed: {e}")
+            external_verdict = "Could not generate external verdict."
     else:
         external_verdict = "No relevant scientific papers found for this claim."
 
-    # Store results
-    claim_data_in_cache["external_verdict"] = external_verdict
-    claim_data_in_cache["sources"] = sources
+    # 6) store in external_cache
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute("""
+    INSERT INTO external_cache (claim_hash, verdict, sources_json, updated_at)
+    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(claim_hash) DO UPDATE SET
+    verdict=excluded.verdict,
+    sources_json=excluded.sources_json,
+    updated_at=CURRENT_TIMESTAMP
+    """, (ch, external_verdict, json_dumps(unique_sources)))
+    conn.commit()
+    conn.close()
 
-    # Update the session data
-    store_analysis(current_article_id, article_cache_data)
-    update_access_time(current_article_id)
-
-    # ✅ AFTER GENERATING EXTERNAL VERDICT, STORE IN GLOBAL CACHE
-    if global_cache_hash and "external_verdict" in claim_data_in_cache and "sources" in claim_data_in_cache:
-        update_global_cache_with_external(
-            global_cache_hash,
-            analysis_mode,
-            claim_idx,
-            {
-                "verdict": claim_data_in_cache["external_verdict"],
-                "sources": claim_data_in_cache["sources"]
-            }
-        )
-        logging.info(f"✅ Stored external verdict in global cache for claim {claim_idx}")
-        
-
-    return jsonify({
-        "verdict": external_verdict,
-        "sources": sources,
-        "cached": False,
-        "global_cache": bool(global_cache_hash)
-    })
-
+    return jsonify({"verdict": external_verdict, "sources": unique_sources, "cached": False})
 
 @app.route("/api/process-image", methods=["POST"])
 def process_image():
@@ -1635,10 +1238,7 @@ def process_image():
         # Compute file hash and check cache
         file_hash = compute_file_hash(image_path)
         cached_text = get_cached_media(file_hash)
-
         if cached_text:
-            logging.info(f"Using cached OCR result for image hash: {file_hash}")
-            # Clean up the uploaded file
             try:
                 os.remove(image_path)
             except:
@@ -1686,10 +1286,7 @@ def process_video():
         # Compute file hash and check cache
         file_hash = compute_file_hash(video_path)
         cached_transcription = get_cached_media(file_hash)
-
         if cached_transcription:
-            logging.info(f"Using cached transcription for video hash: {file_hash}")
-            # Clean up the uploaded file
             try:
                 os.remove(video_path)
             except:
@@ -1728,91 +1325,82 @@ def transcribe_video_url():
 
         transcription = transcribe_from_url(video_url)
         return jsonify({"transcription": transcription})
+
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
     except Exception as e:
         logging.error(f"Error in transcribe_video_url endpoint: {e}")
         return jsonify({"error": f"Failed to transcribe video URL: {str(e)}"}), 500
 
-@app.route("/debug-db")
-def debug_db():
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-    c.execute('SELECT session_id, article_data FROM analysis_sessions ORDER BY last_accessed DESC LIMIT 5')
-    results = c.fetchall()
-    conn.close()
-    debug_info = []
-    for session_id, article_data in results:
-        try:
-            data = json.loads(article_data)
-            debug_info.append({
-                'session_id': session_id,
-                'mode': data.get('mode'),
-                'text_preview': data.get('text', '')[:100] + '...' if data.get('text') else None,
-                'claims_count': len(data.get('claims_data', []))
-            })
-        except:
-            debug_info.append({'session_id': session_id, 'error': 'Failed to parse'})
-    return jsonify(debug_info)
-
-
 @app.route("/api/generate-report", methods=["POST"])
 def generate_report():
     claim_idx = request.json.get("claim_idx")
     question_idx = request.json.get("question_idx")
-    current_article_id = session.get('current_article_id')
-    
-    if not current_article_id:
+    analysis_id = session.get("analysis_id")
+
+    if analysis_id is None:
         return Response(json.dumps({"error": "Analysis context missing. Please re-run analysis."}), mimetype='application/json', status=400)
 
-    article_cache_data = get_analysis(current_article_id)
-    if not article_cache_data:
-        return Response(json.dumps({"error": "Analysis session expired or not found."}), mimetype='application/json', status=400)
+    # get claim text
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute("SELECT claim_text FROM claims WHERE analysis_id=? AND ordinal=?", (analysis_id, int(claim_idx)))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return Response(json.dumps({"error": "Claim not found"}), mimetype='application/json', status=404)
 
-    article_text = article_cache_data.get('text', '')
-    claims_data_in_cache = article_cache_data.get('claims_data', [])
-    
-    if claim_idx is None or question_idx is None or claim_idx >= len(claims_data_in_cache) or 'questions' not in claims_data_in_cache[claim_idx] or question_idx >= len(claims_data_in_cache[claim_idx]['questions']):
-        return Response(json.dumps({"error": "Invalid indices or analysis data missing."}), mimetype='application/json', status=400)
+    claim_text = row[0]
 
-    claim_data_in_cache = claims_data_in_cache[claim_idx]
-    claim_text = claim_data_in_cache['text']
-    question_text = claim_data_in_cache['questions'][question_idx]
-    model_verdict_content = claim_data_in_cache.get('model_verdict', 'Verdict not yet generated by AI.')
-    external_verdict_content = claim_data_in_cache.get('external_verdict', 'Not yet externally verified.')
-    
-    report_key = f"q{question_idx}_report"
+    # get question_text from model_cache using claim_hash
+    claim_hash = sha256_str(claim_text.strip().lower())
+    c.execute("SELECT questions_json FROM model_cache WHERE claim_hash=?", (claim_hash,))
+    questions_row = c.fetchone()
 
-    # ✅ CHECK GLOBAL CACHE FOR REPORTS FIRST
-    global_cache_hash = article_cache_data.get('global_cache_hash')
-    analysis_mode = article_cache_data.get('mode')
-    
-    if global_cache_hash and article_cache_data.get('cached_from_global'):
-        cached_complete = get_global_cache_complete(global_cache_hash, analysis_mode)
-        if cached_complete and cached_complete.get('external_sources'):
-            external_dict = cached_complete['external_sources']
-            global_report_key = f"claim_{claim_idx}_question_{question_idx}"
-            
-            if isinstance(external_dict, dict) and global_report_key in external_dict:
-                cached_report = external_dict[global_report_key]
-                logging.info(f"✅ USING GLOBALLY CACHED report for claim {claim_idx}, question {question_idx}")
-                
-                # Also update session cache for consistency
-                claim_data_in_cache[report_key] = cached_report
-                store_analysis(current_article_id, article_cache_data)
-                
-                def stream_cached_report():
-                    yield f"data: {json.dumps({'content': cached_report})}\n\n"
-                    yield f"data: [DONE]\n\n"
-                
-                return Response(stream_cached_report(), mimetype='text/event-stream')
+    if not questions_row:
+        conn.close()
+        return Response(json.dumps({"error": "Questions not found for this claim. Please generate model verdict first."}), mimetype='application/json', status=400)
 
-    # Check if already cached in session
-    if report_key in claim_data_in_cache and claim_data_in_cache[report_key]:
-        def stream_cached_report():
-            yield f"data: {json.dumps({'content': claim_data_in_cache[report_key]})}\n\n"
-            yield f"data: [DONE]\n\n"
-        return Response(stream_cached_report(), mimetype='text/event-stream')
+    questions = json_loads(questions_row[0], [])
+
+    if question_idx >= len(questions):
+        conn.close()
+        return Response(json.dumps({"error": f"Question index {question_idx} out of range. Only {len(questions)} questions available."}), mimetype='application/json', status=400)
+
+    question_text = questions[question_idx]
+    conn.close()
+
+    rq_hash = sha256_str((claim_text.strip().lower()+"||"+question_text.strip().lower()))
+
+    # hit cache
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+    c.execute("SELECT report_text FROM report_cache WHERE rq_hash=?", (rq_hash,))
+    hit = c.fetchone()
+    conn.close()
+
+    if hit and hit[0]:
+        def stream_cached():
+            yield f"data: {json.dumps({'content': hit[0]})}\n\n"
+            yield "data: [DONE]\n\n"
+        return Response(stream_cached(), mimetype="text/event-stream")
+
+    # Generate report content
+    article_cache_data = {"text": "", "mode": session.get("mode", "General Analysis of Testable Claims")}
+
+    # Get model verdict and external verdict from their caches
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+
+    c.execute("SELECT verdict FROM model_cache WHERE claim_hash=?", (claim_hash,))
+    model_row = c.fetchone()
+    model_verdict_content = model_row[0] if model_row else "Verdict not yet generated by AI."
+
+    c.execute("SELECT verdict FROM external_cache WHERE claim_hash=?", (claim_hash,))
+    external_row = c.fetchone()
+    external_verdict_content = external_row[0] if external_row else "Not yet externally verified."
+
+    conn.close()
 
     prompt = f'''
 You are an AI researcher writing a short, evidence-based report (maximum 1000 words). Your task is to investigate the research question in relation to the claim using verifiable scientific knowledge. Use the article context to ground your analysis where helpful. Clearly explain how the answer to the research question supports, contradicts, or contextualizes the claim. Provide concise reasoning and avoid speculation.
@@ -1820,33 +1408,25 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
 **Structure:**
 
 1. **Introduction:** Briefly state the question's relevance to the claim.
-
 2. **Analysis:** Answer the research question directly, citing evidence or established principles.
-
 3. **Conclusion:** Summarize how the analysis impacts the validity of the original claim.
-
 4. **Sources:** List up to 3 relevant sources with clickable full URLs. Prefer recent, peer-reviewed sources.
 
 ---
 
 **Article Context:**
-
-{article_text}
+{article_cache_data.get("text", "")}
 
 **Claim:**
-
 {claim_text}
 
 **AI's Initial Verdict on Claim:**
-
 {model_verdict_content}
 
 **External Verification Verdict (if available):**
-
 {external_verdict_content}
 
 **Research Question:**
-
 {question_text}
 
 ---
@@ -1854,132 +1434,125 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
 **AI Research Report**
 '''
 
-    def stream_response():
-        full_report_content = ""
-        try:
-            logging.info(f"Calling OpenRouter for report generation for claim {claim_idx}, question {question_idx}...")
-            response = call_openrouter(prompt, stream=True)
-            response.raise_for_status()
+def stream_response():
+    full_report_content = ""
+    try:
+        response = call_openrouter(prompt, stream=True)
+        response.raise_for_status()
+        for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
+            if chunk:
+                lines = chunk.split('\n')
+                for line in lines:
+                    if line.strip().startswith("data:"):
+                        data_part = line.strip()[len("data:"):].strip()
+                        if data_part == '[DONE]':
+                            continue
+                        try:
+                            json_data = json.loads(data_part)
+                            content = json_data['choices'][0]['delta'].get('content', '')
+                            if content:
+                                # Use the new normalization function
+                                normalized_content = normalize_text_for_display(content)
+                                full_report_content += normalized_content
+                                yield f"data: {json.dumps({'content': normalized_content})}\n\n"
+                        except json.JSONDecodeError:
+                            continue
+    except Exception as e:
+        logging.error(f"Error during report streaming for claim {claim_idx}, question {question_idx}: {e}")
+        error_message = f"data: {json.dumps({'error': str(e)})}\n\n"
+        yield error_message
+    finally:
+        if full_report_content.strip():
+            conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO report_cache (rq_hash, question_text, report_text, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(rq_hash) DO UPDATE SET
+                question_text=excluded.question_text,
+                report_text=excluded.report_text,
+                updated_at=CURRENT_TIMESTAMP
+            """, (rq_hash, question_text, full_report_content))
+            conn.commit()
+            conn.close()
 
-            for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
-                if chunk:
-                    lines = chunk.split('\n')
-                    for line in lines:
-                        if line.strip().startswith("data:"):
-                            data_part = line.strip()[len("data:"):].strip()
-                            if data_part == '[DONE]':
-                                continue
-                            try:
-                                json_data = json.loads(data_part)
-                                content = json_data['choices'][0]['delta'].get('content', '')
-                                if content:
-                                    # NORMALIZE UNICODE CHARACTERS
-                                    normalized_content = unicodedata.normalize('NFKD', content)
-                                    # Replace common problematic characters
-                                    normalized_content = normalized_content.replace('--', '-').replace('---', '-')
-                                    normalized_content = normalized_content.replace('â', '-').replace('â', '-')
-                                    normalized_content = normalized_content.replace('â', "'").replace('â', '"').replace('â', '"')
-                                    normalized_content = normalized_content.replace('¯', ' ').replace('­', '')
-                                    normalized_content = normalized_content.replace('Î²', 'beta').replace('Î±', 'alpha').replace('Î³', 'gamma')
-
-                                    full_report_content += normalized_content
-                                    yield f"data: {json.dumps({'content': normalized_content})}\n\n"
-
-                                if json_data['choices'][0].get('finish_reason') == 'stop':
-                                    break
-                            except json.JSONDecodeError:
-                                logging.debug(f"Skipping non-JSON data line: {line}")
-                                continue
-
-                    # This check for 'stop' is another way to ensure we break the loop
-                    # if 'finish_reason' was in the last chunk
-                    if 'stop' in locals().get('json_data', {}).get('choices', [{}])[0].get('finish_reason', ''):
-                        pass
-
-        except Exception as e:
-            logging.error(f"Error during report streaming for claim {claim_idx}, question {question_idx}: {e}")
-            error_message = f"data: {json.dumps({'error': str(e)})}\n\n"
-            yield error_message
-        finally:
-            if full_report_content:
-                claim_data_in_cache[report_key] = full_report_content
-                
-                # ✅ STORE IN GLOBAL CACHE FOR FUTURE USERS
-                if global_cache_hash:
-                    update_global_cache_with_report(
-                        global_cache_hash,
-                        analysis_mode,
-                        claim_idx,
-                        question_idx,
-                        full_report_content
-                    )
-                    logging.info(f"✅ Stored report in global cache for claim {claim_idx}, question {question_idx}")
-                
-                # Update the session data
-                store_analysis(current_article_id, article_cache_data)
-                update_access_time(current_article_id)
-            
-            yield f"data: [DONE]\n\n"
+        yield "data: [DONE]\n\n"
 
     return Response(stream_response(), mimetype='text/event-stream')
-
 
 @app.route("/api/available-reports", methods=["GET"])
 def get_available_reports():
     """Get list of all available reports for the current session"""
-    current_article_id = session.get('current_article_id')
-
-    if not current_article_id:
+    analysis_id = session.get("analysis_id")
+    if not analysis_id:
         return jsonify({"error": "No active analysis session found."}), 400
 
-    article_cache_data = get_analysis(current_article_id)
-    if not article_cache_data:
-        return jsonify({"error": "Analysis session expired or not found."}), 400
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
 
-    claims_data_in_cache = article_cache_data.get('claims_data', [])
+    # Get claims for this analysis
+    c.execute("SELECT ordinal, claim_text FROM claims WHERE analysis_id=? ORDER BY ordinal", (analysis_id,))
+    claim_rows = c.fetchall()
+
     available_reports = []
 
-    # Add model verdicts and external verifications
-    for claim_idx, claim_data in enumerate(claims_data_in_cache):
-        claim_text_preview = claim_data.get('text', '')[:80] + '...' if len(claim_data.get('text', '')) > 80 else claim_data.get('text', '')
+    for ordinal, claim_text in claim_rows:
+        claim_text_preview = claim_text[:80] + '...' if len(claim_text) > 80 else claim_text
 
         # Add model verdict if available
-        if claim_data.get('model_verdict'):
+        claim_hash = sha256_str(claim_text.strip().lower())
+        c.execute("SELECT verdict FROM model_cache WHERE claim_hash=?", (claim_hash,))
+        model_row = c.fetchone()
+        if model_row:
             available_reports.append({
-                "id": f"claim-{claim_idx}-summary",
-                "type": f"Claim {claim_idx + 1} - Model Verdict & External Verification",
+                "id": f"claim-{ordinal}-summary",
+                "type": f"Claim {ordinal + 1} - Model Verdict & External Verification",
                 "description": f"Model analysis and external sources for: {claim_text_preview}"
             })
 
         # Add question reports if available
-        questions = claim_data.get('questions', [])
-        for q_idx, question in enumerate(questions):
-            report_key = f"q{q_idx}_report"
-            if claim_data.get(report_key):
-                available_reports.append({
-                    "id": f"claim-{claim_idx}-question-{q_idx}",
-                    "type": f"Claim {claim_idx + 1} - Question Report {q_idx + 1}",
-                    "description": f"Research report for: {question[:100]}..."
-                })
+        c.execute("SELECT questions_json FROM model_cache WHERE claim_hash=?", (claim_hash,))
+        questions_row = c.fetchone()
+        if questions_row:
+            questions = json_loads(questions_row[0], [])
+            for q_idx, question in enumerate(questions):
+                rq_hash = sha256_str((claim_text.strip().lower()+"||"+question.strip().lower()))
+                c.execute("SELECT report_text FROM report_cache WHERE rq_hash=?", (rq_hash,))
+                report_row = c.fetchone()
+                if report_row:
+                    available_reports.append({
+                        "id": f"claim-{ordinal}-question-{q_idx}",
+                        "type": f"Claim {ordinal + 1} - Question Report {q_idx + 1}",
+                        "description": f"Research report for: {question[:100]}..."
+                    })
 
+    conn.close()
     return jsonify(available_reports)
 
-# Update the existing export-pdf endpoint (replace the entire function)
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
     selected_reports = request.json.get("selected_reports", [])
-    current_article_id = session.get('current_article_id')
+    analysis_id = session.get("analysis_id")
 
-    if not current_article_id:
+    if not analysis_id:
         return "No active analysis session found. Please run an analysis first.", 400
 
-    article_cache_data = get_analysis(current_article_id)
-    if not article_cache_data:
+    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+    c = conn.cursor()
+
+    # Get analysis mode
+    c.execute("SELECT mode FROM analyses WHERE analysis_id=?", (analysis_id,))
+    analysis_row = c.fetchone()
+    if not analysis_row:
         return "Analysis session expired or not found.", 400
 
-    claims_data_in_cache = article_cache_data.get('claims_data', [])
 
-    if not claims_data_in_cache:
+    # Get claims
+    c.execute("SELECT ordinal, claim_text FROM claims WHERE analysis_id=? ORDER BY ordinal", (analysis_id,))
+    claim_rows = c.fetchall()
+    conn.close()
+
+    if not claim_rows:
         return "No claims found for this analysis session.", 400
 
     pdf_reports = []
@@ -1990,55 +1563,87 @@ def export_pdf():
         if report_id in added_ids:
             continue
 
-        # Parse report ID format: "claim-{idx}-summary" or "claim-{idx}-question-{q_idx}"
         if report_id.endswith('-summary'):
-            # This is a model verdict + external verification summary
             try:
                 claim_idx = int(report_id.split('-')[1])
-                claim_data = claims_data_in_cache[claim_idx]
+                for ordinal, claim_text in claim_rows:
+                    if ordinal == claim_idx:
+                        claim_hash = sha256_str(claim_text.strip().lower())
 
-                pdf_reports.append({
-                    "id": report_id,
-                    "claim_text": claim_data.get('text', f"Claim {claim_idx + 1}"),
-                    "model_verdict": claim_data.get('model_verdict', ''),
-                    "external_verdict": claim_data.get('external_verdict', 'Not verified externally.'),
-                    "sources": claim_data.get('sources', []),
-                    "question": "Model verdict + external verification",
-                    "report": None
-                })
-                added_ids.add(report_id)
+                        conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+                        c = conn.cursor()
+
+                        c.execute("SELECT verdict FROM model_cache WHERE claim_hash=?", (claim_hash,))
+                        model_row = c.fetchone()
+                        model_verdict = model_row[0] if model_row else ""
+
+                        c.execute("SELECT verdict, sources_json FROM external_cache WHERE claim_hash=?", (claim_hash,))
+                        external_row = c.fetchone()
+                        external_verdict = external_row[0] if external_row else "Not verified externally."
+                        sources = json_loads(external_row[1], []) if external_row else []
+
+                        conn.close()
+
+                        pdf_reports.append({
+                            "id": report_id,
+                            "claim_text": claim_text,
+                            "model_verdict": model_verdict,
+                            "external_verdict": external_verdict,
+                            "sources": sources,
+                            "question": "Model verdict + external verification",
+                            "report": None
+                        })
+                        added_ids.add(report_id)
+                        break
             except (IndexError, ValueError) as e:
-                logging.warning(f"Invalid summary report ID format: {report_id}")
                 continue
 
         elif 'question' in report_id:
-            # This is a question report: "claim-{idx}-question-{q_idx}"
             try:
                 parts = report_id.split('-')
                 claim_idx = int(parts[1])
                 q_idx = int(parts[3])
-                claim_data = claims_data_in_cache[claim_idx]
 
-                report_key = f"q{q_idx}_report"
-                if report_key in claim_data and claim_data[report_key]:
-                    pdf_reports.append({
-                        "id": report_id,
-                        "claim_text": claim_data.get('text', f"Claim {claim_idx + 1}"),
-                        "model_verdict": claim_data.get('model_verdict', ''),
-                        "external_verdict": claim_data.get('external_verdict', 'Not verified externally.'),
-                        "sources": claim_data.get('sources', []),
-                        "question": claim_data.get('questions', [''])[q_idx],
-                        "report": claim_data[report_key]
-                    })
-                    added_ids.add(report_id)
+                for ordinal, claim_text in claim_rows:
+                    if ordinal == claim_idx:
+                        claim_hash = sha256_str(claim_text.strip().lower())
+
+                        conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
+                        c = conn.cursor()
+
+                        # Get question text
+                        c.execute("SELECT questions_json FROM model_cache WHERE claim_hash=?", (claim_hash,))
+                        questions_row = c.fetchone()
+                        if questions_row:
+                            questions = json_loads(questions_row[0], [])
+                            if q_idx < len(questions):
+                                question_text = questions[q_idx]
+
+                                # Get report
+                                rq_hash = sha256_str((claim_text.strip().lower()+"||"+question_text.strip().lower()))
+                                c.execute("SELECT report_text FROM report_cache WHERE rq_hash=?", (rq_hash,))
+                                report_row = c.fetchone()
+
+                                if report_row:
+                                    pdf_reports.append({
+                                        "id": report_id,
+                                        "claim_text": claim_text,
+                                        "model_verdict": "",
+                                        "external_verdict": "",
+                                        "sources": [],
+                                        "question": question_text,
+                                        "report": report_row[0]
+                                    })
+                                    added_ids.add(report_id)
+                        conn.close()
+                        break
             except (IndexError, ValueError) as e:
-                logging.warning(f"Invalid question report ID format: {report_id}")
                 continue
 
     if not pdf_reports:
         return "No valid reports selected for export.", 400
 
-    # Continue with the existing PDF generation code...
+    # PDF generation
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -2051,6 +1656,7 @@ def export_pdf():
     styles.add(ParagraphStyle(name='ReportBody', parent=styles['NormalParagraph'], fontName='Helvetica', fontSize=10, leading=14, spaceAfter=10))
 
     y = height - inch
+
     p.setFont("Helvetica-Bold", 20)
     p.drawCentredString(width / 2.0, y, "SciCheck AI Analysis Report")
     y -= 40
@@ -2059,16 +1665,19 @@ def export_pdf():
         if y < 1.5 * inch:
             p.showPage()
             y = height - inch
+
         y -= 20
 
         # Claim heading
         y = draw_paragraph(p, f"Claim: {item['claim_text']}", styles['ClaimHeading'], y, width)
 
         # Model verdict
-        y = draw_paragraph(p, f"<b>Model Verdict:</b> {item.get('model_verdict','')}", styles['NormalParagraph'], y, width)
+        if item['model_verdict']:
+            y = draw_paragraph(p, f"<b>Model Verdict:</b> {item.get('model_verdict','')}", styles['NormalParagraph'], y, width)
 
         # External verdict
-        y = draw_paragraph(p, f"<b>External Verdict:</b> {item.get('external_verdict','')}", styles['NormalParagraph'], y, width)
+        if item['external_verdict']:
+            y = draw_paragraph(p, f"<b>External Verdict:</b> {item.get('external_verdict','')}", styles['NormalParagraph'], y, width)
 
         # Sources (if any)
         if item.get('sources'):
@@ -2086,38 +1695,28 @@ def export_pdf():
         # Full report if present
         if item.get('report'):
             y = draw_paragraph(p, "<b>AI Research Report:</b>", styles['SectionHeading'], y, width)
-
             report_content_formatted = normalize_text_for_pdf(item['report'])
             report_content_formatted = convert_markdown_tables_to_simple_text(report_content_formatted)
             report_content_formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', report_content_formatted)
             report_content_formatted = re.sub(r'\[(.*?)\]\((https?://[^\s\]]+)\)', r'<link href="\2">\1</link>', report_content_formatted)
-
             y = draw_paragraph(p, report_content_formatted, styles['ReportBody'], y, width)
 
         y -= 20
 
     p.save()
     buffer.seek(0)
+
     return send_file(buffer, mimetype='application/pdf', as_attachment=True, download_name="SciCheck_AI_Report.pdf")
 
-def draw_paragraph(pdf_canvas, text_content, style, y_pos, page_width, left_margin=0.75*inch, right_margin=0.75*inch):
-    available_width = page_width - left_margin - right_margin
-
-    # NORMALIZE TEXT CONTENT FIRST
-    text_content = normalize_text_for_pdf(text_content)
-
-    # Replace markdown newlines with HTML <br/> for ReportLab Paragraph
-    text_content = text_content.replace('\n', '<br/>')
-
-    para = Paragraph(text_content, style)
-    w, h = para.wrapOn(pdf_canvas, available_width, 0)
-
-    if y_pos - h < 0.75*inch:
-        pdf_canvas.showPage()
-        y_pos = A4[1] - 0.75*inch
-
-    para.drawOn(pdf_canvas, left_margin, y_pos - h)
-    return y_pos - h - style.spaceAfter
+@app.route("/api/cleanup-cache", methods=["POST"])
+def cleanup_cache_endpoint():
+    """Manual cache cleanup endpoint"""
+    try:
+        cleanup_old_cache()
+        return jsonify({"message": "Cache cleanup completed successfully"})
+    except Exception as e:
+        logging.error(f"Manual cleanup error: {e}")
+        return jsonify({"error": f"Cleanup failed: {str(e)}"}), 500
 
 if __name__ == "__main__":
     app.run(debug=True)
