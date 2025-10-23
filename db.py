@@ -1775,57 +1775,17 @@ def export_pdf():
         return "No valid reports selected for export.", 400
 
     # PDF generation
-    
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
 
-    # Register better fonts
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    
-    try:
-        # Try to register Arial for better Unicode support
-        pdfmetrics.registerFont(TTFont('Arial', 'Arial.ttf'))
-        pdfmetrics.registerFont(TTFont('Arial-Bold', 'Arial_Bold.ttf'))
-        default_font = 'Arial'
-    except:
-        # Fallback to Helvetica
-        default_font = 'Helvetica'
-
     styles = getSampleStyleSheet()
-    
-    # Create custom styles with better fonts
-    styles.add(ParagraphStyle(name='ClaimHeading',
-        parent=styles['h2'], 
-        fontName=f'{default_font}-Bold', 
-        fontSize=14, 
-        spaceAfter=6,
-        encoding='utf-8'))
+    styles.add(ParagraphStyle(name='ClaimHeading', parent=styles['h2'], fontName='Helvetica-Bold', fontSize=14, spaceAfter=6))
+    styles.add(ParagraphStyle(name='SectionHeading', parent=styles['h3'], fontName='Helvetica-Bold', fontSize=12, spaceAfter=4, textColor=colors.darkblue))
+    styles.add(ParagraphStyle(name='NormalParagraph', parent=styles['Normal'], fontName='Helvetica', fontSize=10, leading=12, spaceAfter=8))
+    styles.add(ParagraphStyle(name='SourceLink', parent=styles['NormalParagraph'], textColor=colors.blue, fontName='Helvetica', fontSize=9, leading=10, spaceAfter=4))
+    styles.add(ParagraphStyle(name='ReportBody', parent=styles['NormalParagraph'], fontName='Helvetica', fontSize=10, leading=14, spaceAfter=10))
 
-    styles.add(ParagraphStyle(name='SectionHeading',
-        parent=styles['h3'], 
-        fontName=f'{default_font}-Bold', 
-        fontSize=12, 
-        spaceAfter=4, 
-        textColor=colors.darkblue,
-        encoding='utf-8'))
-
-    styles.add(ParagraphStyle(name='NormalParagraph',
-        parent=styles['Normal'], 
-        fontName=default_font, 
-        fontSize=10, 
-        leading=12, 
-        spaceAfter=8,
-        encoding='utf-8'))
-
-    styles.add(ParagraphStyle(name='ReportBody',
-        parent=styles['NormalParagraph'], 
-        fontName=default_font, 
-        fontSize=9,  # Smaller font to fit more content
-        leading=11, 
-        spaceAfter=6,
-        encoding='utf-8'))
         
     y = height - inch
 
