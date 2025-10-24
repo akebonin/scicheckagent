@@ -843,25 +843,25 @@ def normalize_text_for_display(text):
 
     # Normalize Unicode first
     normalized = unicodedata.normalize('NFKC', text)  # Changed to NFKC for more aggressive normalization
-    
+
     # Comprehensive replacements for display
     replacements = {
         # Dashes and hyphens - comprehensive coverage
         '–': '-', '—': '-', '―': '-', '‒': '-', '‐': '-', '‑': '-',
         '−': '-', '–': '-', '—': '-', '―': '-', '': '-', '': '-',
-        
+
         # Smart quotes and apostrophes
         '‘': "'", '’': "'", '‚': "'", '‛': "'",
         '“': '"', '”': '"', '„': '"', '‟': '"',
         '´': "'", '`': "'", 'ʻ': "'", 'ʼ': "'",
         '«': '"', '»': '"', '‹': "'", '›': "'",
-        
+
         # Mathematical symbols and special characters
         '°': ' degrees ', '±': '+/-', '×': 'x', '÷': '/',
         '≈': '~', '≠': '!=', '≤': '<=', '≥': '>=',
         'µ': 'u', 'α': 'alpha', 'β': 'beta', 'γ': 'gamma',
         'δ': 'delta', 'ε': 'epsilon', 'θ': 'theta',
-        
+
         # Common problematic encodings
         '': '', '': '', '': '', '': '', '': '',
         '': '', '': '', '': '', '': '', '': '',
@@ -870,11 +870,11 @@ def normalize_text_for_display(text):
         '': '', '': '', '': '', '': '', '': '',
         '': '', '': '', '': '', '': '', '': '',
         '': '', '': '',
-        
+
         # Spaces and invisible characters
         '\u200b': '', '\ufeff': '', '\u202a': '', '\u202c': '',
-        '\u200e': '', '\u200f': '', ' ': ' ', ' ': ' ', 
-        ' ': ' ', '': '', '﻿': '', '\xa0': ' ',
+        '\u200e': '', '\u200f': '', ' ': ' ', ' ': ' ',
+        ' ': ' ', '': '', '': '', '\xa0': ' ',
     }
 
     for old, new in replacements.items():
@@ -882,7 +882,7 @@ def normalize_text_for_display(text):
 
     # Remove any remaining problematic control characters
     normalized = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]', '', normalized)
-    
+
     return normalized
 
 def normalize_text_for_pdf(text):
@@ -931,21 +931,21 @@ def clean_html_for_reportlab(text):
     """Clean HTML but preserve table structure for PDF"""
     if not text:
         return text
-    
+
     # First normalize
     text = normalize_text_for_pdf(text)
-    
+
     # Remove problematic HTML but keep table-related structure
     text = re.sub(r'<br\s*/?>', '\n', text)
     text = re.sub(r'<[^>]+>', '', text)  # Remove all other HTML tags
-    
+
     # Fix common issues
     text = re.sub(r'&[^;]+;', '', text)
     text = re.sub(r'\xa0', ' ', text)
-    
+
     # Ensure proper spacing
     text = re.sub(r'\n\s*\n', '\n\n', text)
-    
+
     return text.strip()
 
 def process_report_content_for_pdf(content):
@@ -955,24 +955,24 @@ def process_report_content_for_pdf(content):
     current_text_block = []
     current_table_lines = []
     in_table = False
-    
+
     for line in lines:
         line = line.strip()
-        
+
         # Check if this line starts a table
         if line.startswith('|') and ('---' in line or any(cell.strip() for cell in line.split('|')[1:-1])):
             if current_text_block:
                 # Save the current text block
                 processed_blocks.append(('text', '\n'.join(current_text_block)))
                 current_text_block = []
-            
+
             in_table = True
             current_table_lines.append(line)
-        
+
         elif in_table and line.startswith('|'):
             # Continue collecting table lines
             current_table_lines.append(line)
-        
+
         elif in_table and not line.startswith('|'):
             # Table ended, process it
             if current_table_lines:
@@ -981,28 +981,28 @@ def process_report_content_for_pdf(content):
                 current_table_lines = []
             in_table = False
             current_text_block.append(line)
-        
+
         else:
             # Regular text line
             current_text_block.append(line)
-    
+
     # Don't forget any remaining content
     if current_text_block:
         processed_blocks.append(('text', '\n'.join(current_text_block)))
     if current_table_lines:
         processed_blocks.append(('table', '\n'.join(current_table_lines)))
-    
+
     return processed_blocks
 
 def split_long_report(report_content, max_section_length=1500):
     """Split very long reports into manageable sections"""
     if len(report_content) <= max_section_length:
         return [report_content]
-    
+
     # Try to split at natural boundaries
     sections = []
     current_section = ""
-    
+
     # Split by lines and rebuild sections
     lines = report_content.split('\n')
     for line in lines:
@@ -1011,34 +1011,34 @@ def split_long_report(report_content, max_section_length=1500):
             current_section = line + '\n'
         else:
             current_section += line + '\n'
-    
+
     if current_section:
         sections.append(current_section)
-    
+
     return sections
 
 def draw_paragraph(pdf_canvas, text_content, style, y_pos, page_width, left_margin=0.75*inch, right_margin=0.75*inch):
     """Safe paragraph drawing with better page management"""
     available_width = page_width - left_margin - right_margin
-    
+
     # Clean the text but keep it simple - NO TABLE CONVERSION!
     text_content = clean_html_for_reportlab(text_content)
-    
+
     # Replace newlines with <br/> for Paragraph
     text_content = text_content.replace('\n', '<br/>')
-    
+
     try:
         para = Paragraph(text_content, style)
         w, h = para.wrapOn(pdf_canvas, available_width, 0)
-        
+
         # Check if we need a new page - be more conservative
         if y_pos - h < 1.5 * inch:  # Increased bottom margin
             pdf_canvas.showPage()
             y_pos = A4[1] - 0.75 * inch
-        
+
         para.drawOn(pdf_canvas, left_margin, y_pos - h)
         return y_pos - h - style.spaceAfter
-        
+
     except Exception as e:
         logging.warning(f"Paragraph drawing failed: {e}")
         # Fallback to simple text
@@ -1049,7 +1049,7 @@ def draw_simple_text(pdf_canvas, text_content, y_pos, page_width, left_margin):
     pdf_canvas.setFont("Helvetica", 9)
     line_height = 11
     lines = text_content.replace('<br/>', '\n').split('\n')
-    
+
     for line in lines:
         # Simple line wrapping
         if len(line) > 120:
@@ -1084,32 +1084,32 @@ def draw_simple_text(pdf_canvas, text_content, y_pos, page_width, left_margin):
                 pdf_canvas.setFont("Helvetica", 9)
             pdf_canvas.drawString(left_margin, y_pos, line.strip())
             y_pos -= line_height
-    
+
     return y_pos
 
 def parse_markdown_table(markdown_text):
     """Parse markdown table and return data for ReportLab Table"""
     lines = [line.strip() for line in markdown_text.split('\n') if line.strip().startswith('|')]
-    
+
     if len(lines) < 2:
         return None
-    
+
     table_data = []
     for line in lines:
         cells = [cell.strip() for cell in line.split('|')[1:-1]]  # Remove empty first/last
         table_data.append(cells)
-    
+
     # Remove separator line if it exists
     if len(table_data) > 1 and all(cell.replace('-', '').replace(':', '').replace(' ', '') == '' for cell in table_data[1]):
         table_data.pop(1)
-    
+
     return table_data if table_data else None
 
 def create_table_from_data(table_data, available_width):
     """Create a ReportLab Table object from parsed data"""
     if not table_data:
         return None
-    
+
     # Clean the data
     cleaned_data = []
     for row in table_data:
@@ -1120,10 +1120,10 @@ def create_table_from_data(table_data, available_width):
             clean_cell = clean_cell.replace('<br/>', '\n')
             cleaned_row.append(clean_cell)
         cleaned_data.append(cleaned_row)
-    
+
     # Create the table
     table = Table(cleaned_data, colWidths=None)
-    
+
     # Style the table
     table.setStyle(TableStyle([
         ('FONT', (0, 0), (-1, -1), 'Helvetica', 8),
@@ -1137,10 +1137,11 @@ def create_table_from_data(table_data, available_width):
         ('LEFTPADDING', (0, 0), (-1, -1), 4),
         ('RIGHTPADDING', (0, 0), (-1, -1), 4),
     ]))
-    
+
     # Auto-size columns
-    table._argW = self._calcWidths(available_width * 0.9)  # Use 90% of available width
-    
+    table._argW = [available_width / len(cleaned_data[0])] * len(cleaned_data[0])
+
+
     return table
 
 # API Endpoints
@@ -1613,14 +1614,14 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
 - Use simple quotes "' for apostrophes and quotes
 - For tables: use simple text with | separators OR just describe the data
 - Use **bold** for emphasis only when necessary
-- Use simple bullet points with * 
+- Use simple bullet points with *
 - Separate sections with clear headings using ##
 
 **Structure:**
 ## 1. **Introduction**
 [Content]
 
-## 2. **Analysis**  
+## 2. **Analysis**
 [Content - use simple text descriptions instead of complex tables when possible]
 
 ## 3. **Conclusion**
@@ -1628,7 +1629,7 @@ You are an AI researcher writing a short, evidence-based report (maximum 1000 wo
 
 ## 4. **Sources**
 [Content]
-    
+
 ---
 
 **Article Context:**
@@ -1876,11 +1877,11 @@ def export_pdf():
     styles.add(ParagraphStyle(name='SourceLink', parent=styles['NormalParagraph'], textColor=colors.blue, fontName='Helvetica', fontSize=9, leading=10, spaceAfter=4))
     styles.add(ParagraphStyle(name='ReportBody', parent=styles['NormalParagraph'], fontName='Helvetica', fontSize=10, leading=14, spaceAfter=10))
 
-        
+
     y = height - inch
 
     p.setFont("Helvetica-Bold", 20)
-    p.drawCentredString(width / 2.0, y, "SciCheck AI Analysis Report")
+    p.drawCentredString(width / 2.0, y, "epistemiq Analysis Report")
     y -= 40
 
     for item in pdf_reports:
@@ -1916,29 +1917,48 @@ def export_pdf():
 
         # Full report if present
         if item.get('report'):
-    y = draw_paragraph(p, "<b>AI Research Report:</b>", styles['SectionHeading'], y, width)
-    
-    report_content = item['report']
-    sections = split_long_report(report_content)
-    
-    for i, section in enumerate(sections):
-        y = draw_paragraph(p, section, styles['ReportBody'], y, width)
-        
-        # Add a small gap between sections, but not after the last one
-        if i < len(sections) - 1:
-            y -= 10
-        
-        # Extra safety check - if we're getting too low, new page
-        if y < 2 * inch:
-            p.showPage()
-            y = A4[1] - 0.75 * inch
+           y = draw_paragraph(p, "<b>AI Research Report:</b>", styles['SectionHeading'], y, width)
 
-    y -= 20
+           report_content = item['report']
+           sections = split_long_report(report_content)
+
+for i, section in enumerate(sections):
+    blocks = process_report_content_for_pdf(section)
+
+    for block_type, block_content in blocks:
+        if block_type == "text":
+            y = draw_paragraph(p, block_content, styles['ReportBody'], y, width)
+
+        elif block_type == "table":
+            table_data = parse_markdown_table(block_content)
+            if table_data:
+                table = create_table_from_data(table_data, width - 1.5 * inch)
+                if table:
+                    w, h = table.wrapOn(p, width - 1.5 * inch, y)
+                    if y - h < 1.5 * inch:
+                        p.showPage()
+                        y = A4[1] - 0.75 * inch
+                    try:
+                        table.drawOn(p, 0.75 * inch, y - h)
+                    except Exception as e:
+                        logging.error(f"Error drawing table: {e}")
+                    y -= h + 10
+
+    # Add spacing between sections
+    if i < len(sections) - 1:
+        y -= 10
+
+    # New page if near bottom
+    if y < 2 * inch:
+        p.showPage()
+        y = A4[1] - 0.75 * inch
+
+              y -= 20
 
     p.save()
     buffer.seek(0)
 
-    return send_file(buffer, mimetype='application/pdf', as_attachment=True, download_name="SciCheck_AI_Report.pdf")
+    return send_file(buffer, mimetype='application/pdf', as_attachment=True, download_name="epistemiq_AI_Report.pdf")
 
 @app.route("/api/cleanup-cache", methods=["POST"])
 def cleanup_cache_endpoint():
