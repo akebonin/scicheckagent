@@ -1753,211 +1753,124 @@ def get_available_reports():
 
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf():
+    """Generate an Epistemiq AI Report PDF for selected claims."""
     selected_reports = request.json.get("selected_reports", [])
-    analysis_id = session.get("analysis_id")
+    current_article_id = session.get("current_article_id")
 
-    if not analysis_id:
+    if not current_article_id:
         return "No active analysis session found. Please run an analysis first.", 400
 
-    conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-    c = conn.cursor()
-
-    # Get analysis mode
-    c.execute("SELECT mode FROM analyses WHERE analysis_id=?", (analysis_id,))
-    analysis_row = c.fetchone()
-    if not analysis_row:
+    article_cache_data = get_analysis(current_article_id)
+    if not article_cache_data:
         return "Analysis session expired or not found.", 400
 
-    # Get claims
-    c.execute("SELECT ordinal, claim_text FROM claims WHERE analysis_id=? ORDER BY ordinal", (analysis_id,))
-    claim_rows = c.fetchall()
-    conn.close()
-
-    if not claim_rows:
+    claims_data_in_cache = article_cache_data.get("claims_data", [])
+    if not claims_data_in_cache:
         return "No claims found for this analysis session.", 400
 
     pdf_reports = []
-    added_ids = set()
-
-    # Process selected reports based on their IDs
-    for report_id in selected_reports:
-        if report_id in added_ids:
+    for claim_idx, claim_item_in_cache in enumerate(claims_data_in_cache):
+        if "model_verdict" not in claim_item_in_cache or "questions" not in claim_item_in_cache:
+            logging.warning(f"Skipping claim {claim_idx} for PDF: missing model verdict or questions in cache.")
             continue
+        pdf_reports.append({
+            "claim_text": claim_item_in_cache.get("claim_text", ""),
+            "model_verdict": claim_item_in_cache.get("model_verdict", ""),
+            "external_verdict": claim_item_in_cache.get("external_verdict", ""),
+            "report": claim_item_in_cache.get("report", ""),
+            "sources": claim_item_in_cache.get("sources", []),
+        })
 
-        if report_id.endswith('-summary'):
-            try:
-                claim_idx = int(report_id.split('-')[1])
-                for ordinal, claim_text in claim_rows:
-                    if ordinal == claim_idx:
-                        claim_hash = sha256_str(claim_text.strip().lower())
-
-                        conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-                        c = conn.cursor()
-
-                        c.execute("SELECT verdict FROM model_cache WHERE claim_hash=?", (claim_hash,))
-                        model_row = c.fetchone()
-                        model_verdict = model_row[0] if model_row else ""
-
-                        c.execute("SELECT verdict, sources_json FROM external_cache WHERE claim_hash=?", (claim_hash,))
-                        external_row = c.fetchone()
-                        external_verdict = external_row[0] if external_row else "Not verified externally."
-                        sources = json_loads(external_row[1], []) if external_row else []
-
-                        conn.close()
-
-                        pdf_reports.append({
-                            "id": report_id,
-                            "claim_text": claim_text,
-                            "model_verdict": model_verdict,
-                            "external_verdict": external_verdict,
-                            "sources": sources,
-                            "question": "Model verdict + external verification",
-                            "report": None
-                        })
-                        added_ids.add(report_id)
-                        break
-            except (IndexError, ValueError):
-                continue
-
-        elif 'question' in report_id:
-            try:
-                parts = report_id.split('-')
-                claim_idx = int(parts[1])
-                q_idx = int(parts[3])
-
-                for ordinal, claim_text in claim_rows:
-                    if ordinal == claim_idx:
-                        claim_hash = sha256_str(claim_text.strip().lower())
-
-                        conn = sqlite3.connect('/home/scicheckagent/mysite/sessions.db')
-                        c = conn.cursor()
-
-                        # Get question text
-                        c.execute("SELECT questions_json FROM model_cache WHERE claim_hash=?", (claim_hash,))
-                        questions_row = c.fetchone()
-                        if questions_row:
-                            questions = json_loads(questions_row[0], [])
-                            if q_idx < len(questions):
-                                question_text = questions[q_idx]
-
-                                # Get report
-                                rq_hash = sha256_str((claim_text.strip().lower() + "||" + question_text.strip().lower()))
-                                c.execute("SELECT report_text FROM report_cache WHERE rq_hash=?", (rq_hash,))
-                                report_row = c.fetchone()
-
-                                if report_row:
-                                    pdf_reports.append({
-                                        "id": report_id,
-                                        "claim_text": claim_text,
-                                        "model_verdict": "",
-                                        "external_verdict": "",
-                                        "sources": [],
-                                        "question": question_text,
-                                        "report": report_row[0]
-                                    })
-                                    added_ids.add(report_id)
-                        conn.close()
-                        break
-            except (IndexError, ValueError):
-                continue
-
-    if not pdf_reports:
-        return "No valid reports selected for export.", 400
-
-    # PDF generation
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
+    y = height - 0.75 * inch
 
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name='ClaimHeading', parent=styles['h2'], fontName='Helvetica-Bold', fontSize=14, spaceAfter=6))
-    styles.add(ParagraphStyle(name='SectionHeading', parent=styles['h3'], fontName='Helvetica-Bold', fontSize=12, spaceAfter=4, textColor=colors.darkblue))
-    styles.add(ParagraphStyle(name='NormalParagraph', parent=styles['Normal'], fontName='Helvetica', fontSize=10, leading=12, spaceAfter=8))
-    styles.add(ParagraphStyle(name='SourceLink', parent=styles['NormalParagraph'], textColor=colors.blue, fontName='Helvetica', fontSize=9, leading=10, spaceAfter=4))
-    styles.add(ParagraphStyle(name='ReportBody', parent=styles['NormalParagraph'], fontName='Helvetica', fontSize=10, leading=14, spaceAfter=10))
+    styles.add(ParagraphStyle(name="ClaimHeading", fontSize=13, leading=16, spaceAfter=8, spaceBefore=12, bold=True))
+    styles.add(ParagraphStyle(name="BodyText", fontSize=11, leading=14))
+    styles.add(ParagraphStyle(name="SectionHeading", fontSize=12, leading=15, spaceBefore=10, spaceAfter=6, bold=True))
+    styles.add(ParagraphStyle(name="ReportBody", fontSize=10.5, leading=13))
 
-    y = height - inch
+    def draw_paragraph(canvas_obj, text, style, y_pos, max_width):
+        para = Paragraph(text, style)
+        w, h = para.wrap(max_width - 1.5 * inch, y_pos)
+        if y_pos - h < 0.75 * inch:
+            canvas_obj.showPage()
+            y_pos = height - 0.75 * inch
+        para.drawOn(canvas_obj, 0.75 * inch, y_pos - h)
+        return y_pos - h - 6
 
-    p.setFont("Helvetica-Bold", 20)
-    p.drawCentredString(width / 2.0, y, "epistemiq Analysis Report")
-    y -= 40
-
+    # ---- MAIN LOOP ----
     for item in pdf_reports:
-        if y < 1.5 * inch:
-            p.showPage()
-            y = height - inch
+        # --- Claim text ---
+        y = draw_paragraph(p, f"<b>Claim:</b> {escape_html(item['claim_text'])}", styles["BodyText"], y, width)
+        # --- Model verdict ---
+        y = draw_paragraph(p, f"<b>Model Verdict:</b> {escape_html(item['model_verdict'])}", styles["BodyText"], y, width)
 
-        y -= 20
+        # --- External verdict (if any) ---
+        if item.get("external_verdict"):
+            y = draw_paragraph(p, f"<b>External Verdict:</b> {escape_html(item['external_verdict'])}", styles["BodyText"], y, width)
 
-        # Claim heading
-        y = draw_paragraph(p, f"Claim: {item['claim_text']}", styles['ClaimHeading'], y, width)
+        # --- Sources (if any) ---
+        if item.get("sources"):
+            y = draw_paragraph(p, "<b>Sources:</b>", styles["SectionHeading"], y, width)
+            for s in item["sources"]:
+                y = draw_paragraph(p, f"- {escape_html(s)}", styles["BodyText"], y, width)
 
-        # Model verdict
-        if item['model_verdict']:
-            y = draw_paragraph(p, f"<b>Model Verdict:</b> {item.get('model_verdict', '')}", styles['NormalParagraph'], y, width)
-
-        # External verdict
-        if item['external_verdict']:
-            y = draw_paragraph(p, f"<b>External Verdict:</b> {item.get('external_verdict', '')}", styles['NormalParagraph'], y, width)
-
-        # Sources (if any)
-        if item.get('sources'):
-            y = draw_paragraph(p, "<b>External Sources:</b>", styles['SectionHeading'], y, width)
-            for src in item.get('sources', []):
-                link_text = f"{src.get('title', '')}"
-                if src.get('url'):
-                    escaped_url = src['url'].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-                    link_text = f'<link href="{escaped_url}">{link_text}</link>'
-                y = draw_paragraph(p, f"- {link_text}", styles['SourceLink'], y, width)
-
-        # Question heading
-        y = draw_paragraph(p, f"<b>Research Question:</b> {item.get('question', '')}", styles['SectionHeading'], y, width)
-
-        # Full report if present
-        if item.get('report'):
-            y = draw_paragraph(p, "<b>AI Research Report:</b>", styles['SectionHeading'], y, width)
-
-            report_content = item['report']
+        # --- AI Research Report (main body) ---
+        if item.get("report"):
+            y = draw_paragraph(p, "<b>AI Research Report:</b>", styles["SectionHeading"], y, width)
+            report_content = item["report"]
             sections = split_long_report(report_content)
 
+            # ✅ Correct indentation: loop now inside the report block
             for i, section in enumerate(sections):
                 blocks = process_report_content_for_pdf(section)
-
                 for block_type, block_content in blocks:
                     if block_type == "text":
-                        y = draw_paragraph(p, block_content, styles['ReportBody'], y, width)
+                        y = draw_paragraph(p, block_content, styles["ReportBody"], y, width)
 
                     elif block_type == "table":
                         table_data = parse_markdown_table(block_content)
                         if table_data:
                             table = create_table_from_data(table_data, width - 1.5 * inch)
                             if table:
-                                w, h = table.wrapOn(p, width - 1.5 * inch, y)
-                                if y - h < 1.5 * inch:
-                                    p.showPage()
-                                    y = A4[1] - 0.75 * inch
                                 try:
+                                    w, h = table.wrapOn(p, width - 1.5 * inch, y)
+                                    if y - h < 1.5 * inch:
+                                        p.showPage()
+                                        y = height - 0.75 * inch
                                     table.drawOn(p, 0.75 * inch, y - h)
+                                    y -= h + 10
                                 except Exception as e:
-                                    logging.error(f"Error drawing table: {e}")
-                                y -= h + 10
+                                    logging.error(f"Error drawing table in section {i}: {e}")
 
-                # Add spacing between sections
+                # add spacing between sections
                 if i < len(sections) - 1:
                     y -= 10
-
-                # New page if near bottom
-                if y < 2 * inch:
+                if y < 1.25 * inch:
                     p.showPage()
-                    y = A4[1] - 0.75 * inch
+                    y = height - 0.75 * inch
 
-            y -= 20
+            y -= 20  # space after full report
 
+        # --- Page length guard between claims ---
+        if y < 1.25 * inch:
+            p.showPage()
+            y = height - 0.75 * inch
+
+    # ---- SAVE AND RETURN ----
     p.save()
     buffer.seek(0)
 
-    return send_file(buffer, mimetype='application/pdf', as_attachment=True, download_name="epistemiq_AI_Report.pdf")
-
+    return send_file(
+        buffer,
+        as_attachment=True,
+        mimetype="application/pdf",
+        download_name="epistemiq_AI_Report.pdf"
+)
+                                
 @app.route("/api/cleanup-cache", methods=["POST"])
 def cleanup_cache_endpoint():
     """Manual cache cleanup endpoint"""
